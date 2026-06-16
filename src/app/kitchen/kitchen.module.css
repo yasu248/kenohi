@@ -1,0 +1,388 @@
+.kitchenContainer {
+  min-height: 100vh;
+  background-color: #f8fafc;
+  padding: 30px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.kitchenHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.kitchenTitle {
+  font-size: 1.75rem;
+  font-weight: 900;
+  color: var(--primary-dark);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kitchenSub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.navLink {
+  background-color: white;
+  border: 1px solid #cbd5e1;
+  color: var(--text-main);
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all var(--transition-fast);
+}
+
+.navLink:hover {
+  background-color: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+/* Three Columns Grid */
+.kanbanGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  flex: 1;
+}
+
+@media (max-width: 900px) {
+  .kanbanGrid {
+    grid-template-columns: 1fr;
+    gap: 30px;
+  }
+}
+
+.kanbanColumn {
+  background-color: #f1f5f9;
+  border-radius: 24px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 500px;
+  border: 1.5px solid #e2e8f0;
+}
+
+.columnHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.columnTitle {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.columnCount {
+  background-color: white;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 2px 10px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+}
+
+.orderList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Order Card */
+.orderCard {
+  background-color: white;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  border-left: 5px solid #cbd5e1;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  animation: fadeIn var(--transition-fast);
+}
+
+.orderCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+
+/* Color codes based on column status */
+.pendingCard {
+  border-left-color: var(--accent-pink);
+}
+
+.preparingCard {
+  border-left-color: #3b82f6; /* Blue for preparing */
+}
+
+.completedCard {
+  border-left-color: var(--primary-green);
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 10px;
+}
+
+.orderNo {
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #1e293b;
+}
+
+.orderTime {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.customerInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.customerName {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.itemDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.drinkItem {
+  display: flex;
+  flex-direction: column;
+}
+
+.drinkName {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #1e293b;
+}
+
+.drinkOpts {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.drinkQty {
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: var(--primary-dark);
+  margin-top: 2px;
+}
+
+/* Card Actions */
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.btnPrimary {
+  flex: 1;
+  background-color: var(--primary-dark);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  transition: background-color var(--transition-fast);
+}
+
+.btnPrimary:hover {
+  background-color: #2c4933;
+}
+
+.btnSecondary {
+  background-color: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btnSecondary:hover {
+  background-color: #e2e8f0;
+  color: #1e293b;
+}
+
+/* Empty state */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #94a3b8;
+  gap: 8px;
+  text-align: center;
+}
+
+.emptyText {
+  font-size: 0.85rem;
+}
+
+/* ===== パスワードログイン画面 ===== */
+.loginWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a2f 50%, #0f172a 100%);
+}
+
+.loginCard {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 28px;
+  padding: 48px 40px;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+}
+
+.loginIcon {
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, var(--primary-green, #3a6349), #2c4933);
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24px;
+  color: white;
+  box-shadow: 0 8px 20px rgba(58, 99, 73, 0.4);
+}
+
+.loginTitle {
+  font-size: 1.75rem;
+  font-weight: 900;
+  color: white;
+  margin-bottom: 8px;
+}
+
+.loginSubtitle {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.6;
+  margin-bottom: 32px;
+}
+
+.loginForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.passwordInput {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 14px;
+  padding: 14px 18px;
+  font-size: 1rem;
+  color: white;
+  outline: none;
+  transition: border-color 0.2s;
+  text-align: center;
+  letter-spacing: 0.2em;
+}
+
+.passwordInput::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+  letter-spacing: 0;
+}
+
+.passwordInput:focus {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.passwordInputError {
+  border-color: #f87171 !important;
+  animation: shake 0.3s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+.errorMsg {
+  font-size: 0.85rem;
+  color: #f87171;
+  margin: 0;
+}
+
+.loginButton {
+  background: linear-gradient(135deg, #3a6349, #2c4933);
+  color: white;
+  border: none;
+  border-radius: 14px;
+  padding: 14px;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+  margin-top: 4px;
+}
+
+.loginButton:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.loginButton:active {
+  transform: translateY(0);
+}
