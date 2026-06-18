@@ -96,6 +96,7 @@ export default function Home() {
   const [showCartDetail, setShowCartDetail] = useState(false);
   const [orderCompleteNo, setOrderCompleteNo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [calledOrders, setCalledOrders] = useState<string[]>([]);
 
   // Initialize LIFF
   useEffect(() => {
@@ -111,6 +112,24 @@ export default function Home() {
       }
     }
     init();
+  }, []);
+
+  // 呼び出し中の注文を取得（5秒ごと）
+  useEffect(() => {
+    const fetchCalledOrders = async () => {
+      try {
+        const res = await fetch('/api/orders');
+        if (!res.ok) return;
+        const all = await res.json();
+        const called = all
+          .filter((o: any) => o.status === 'completed')
+          .map((o: any) => o.orderNumber);
+        setCalledOrders(called);
+      } catch (err) {}
+    };
+    fetchCalledOrders();
+    const id = setInterval(fetchCalledOrders, 5000);
+    return () => clearInterval(id);
   }, []);
 
   const openOptionModal = (item: MenuItem) => {
@@ -180,6 +199,15 @@ export default function Home() {
   if (orderCompleteNo) {
     return (
       <main className={styles.container}>
+        {/* Called Orders Banner */}
+        {calledOrders.length > 0 && (
+          <div className={styles.callBanner}>
+            <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
+            <div className={styles.callBannerNumbers}>
+              {calledOrders.join(' , ')}
+            </div>
+          </div>
+        )}
         <div className={styles.successContainer}>
           <div className={styles.successIcon}>
             <Check size={80} strokeWidth={3} />
@@ -223,6 +251,16 @@ export default function Home() {
           </div>
         )}
       </header>
+
+      {/* Called Orders Banner */}
+      {calledOrders.length > 0 && (
+        <div className={styles.callBanner}>
+          <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
+          <div className={styles.callBannerNumbers}>
+            {calledOrders.join(' , ')}
+          </div>
+        </div>
+      )}
 
       {/* Hero Welcome */}
       <section className={styles.hero}>

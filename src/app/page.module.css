@@ -497,3 +497,36 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* Call Banner */
+.callBanner {
+  background-color: var(--primary-dark);
+  color: #fff;
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: slideDown var(--transition-normal);
+  border-bottom: 2px solid var(--accent-pink);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.callBannerTitle {
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: #d1d5db;
+}
+
+.callBannerNumbers {
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: var(--accent-pink);
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
