@@ -107,6 +107,9 @@ export default function KitchenMonitor() {
                 onChange={(e) => setPasswordInput(e.target.value)}
                 placeholder="パスワードを入力"
                 className={`${styles.passwordInput} ${passwordError ? styles.passwordInputError : ''}`}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 autoFocus
               />
               {passwordError && (
