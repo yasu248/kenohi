@@ -91,6 +91,7 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [sweetness, setSweetness] = useState('ふつう');   // ミルクティー用
   const [temperature, setTemperature] = useState('ホット'); // ストレートティー用
+  const [iceAmount, setIceAmount] = useState('ふつう');     // 氷の量
   const [quantity, setQuantity] = useState(1);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [showCartDetail, setShowCartDetail] = useState(false);
@@ -143,6 +144,7 @@ export default function Home() {
     setSelectedItem(item);
     setSweetness('ふつう');
     setTemperature('ホット');
+    setIceAmount('ふつう');
     setQuantity(1);
   };
 
@@ -159,7 +161,7 @@ export default function Home() {
 
     const optionDesc =
       selectedItem.category === 'straight'
-        ? `温度: ${temperature}`
+        ? (temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`)
         : `甘さ: ${sweetness}`;
 
     const newCartItem: OrderItem = {
@@ -345,6 +347,31 @@ export default function Home() {
                       />
                       <label htmlFor={`temp-${t}`} className={styles.optionLabel}>
                         {t}
+                      </label>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ストレートティー（アイス）：氷の量選択 */}
+            {selectedItem.category === 'straight' && temperature === 'アイス' && (
+              <div className={styles.optionSection}>
+                <span className={styles.optionTitle}>氷の量</span>
+                <div className={styles.optionsGrid}>
+                  {['ふつう', '半分', 'なし'].map((amt) => (
+                    <React.Fragment key={`ice-${amt}`}>
+                      <input
+                        type="radio"
+                        id={`ice-${amt}`}
+                        name="iceAmount"
+                        value={amt}
+                        checked={iceAmount === amt}
+                        onChange={() => setIceAmount(amt)}
+                        className={styles.optionChip}
+                      />
+                      <label htmlFor={`ice-${amt}`} className={styles.optionLabel}>
+                        {amt}
                       </label>
                     </React.Fragment>
                   ))}
