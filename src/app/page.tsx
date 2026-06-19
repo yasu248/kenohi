@@ -174,9 +174,6 @@ export default function Home() {
 
   const handleRemoveFromCart = (indexToRemove: number) => {
     setCart((prev) => prev.filter((_, index) => index !== indexToRemove));
-    if (cart.length <= 1) {
-      setShowCartDetail(false);
-    }
   };
 
   const handleCheckout = async () => {
