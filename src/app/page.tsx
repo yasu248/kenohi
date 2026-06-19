@@ -97,6 +97,7 @@ export default function Home() {
   const [orderCompleteNo, setOrderCompleteNo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [calledOrders, setCalledOrders] = useState<string[]>([]);
+  const [myActiveOrderNo, setMyActiveOrderNo] = useState<string | null>(null);
 
   // Initialize LIFF
   useEffect(() => {
@@ -112,6 +113,12 @@ export default function Home() {
       }
     }
     init();
+    
+    // 過去の自分の注文番号を復元
+    const savedOrderNo = localStorage.getItem('kenohi_my_order_no');
+    if (savedOrderNo) {
+      setMyActiveOrderNo(savedOrderNo);
+    }
   }, []);
 
   // 呼び出し中の注文を取得（5秒ごと）
@@ -183,6 +190,9 @@ export default function Home() {
 
       const order = await res.json();
       setOrderCompleteNo(order.orderNumber);
+      setMyActiveOrderNo(order.orderNumber);
+      localStorage.setItem('kenohi_my_order_no', order.orderNumber);
+      
       setCart([]);
       setShowCartDetail(false);
     } catch (err) {
@@ -253,12 +263,35 @@ export default function Home() {
       </header>
 
       {/* Called Orders Banner */}
-      {calledOrders.length > 0 && (
+      {(calledOrders.length > 0 || myActiveOrderNo) && (
         <div className={styles.callBanner}>
-          <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
-          <div className={styles.callBannerNumbers}>
-            {calledOrders.join(' , ')}
-          </div>
+          {calledOrders.length > 0 && (
+            <div className={styles.calledSection}>
+              <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
+              <div className={styles.callBannerNumbers}>
+                {calledOrders.join(' , ')}
+              </div>
+            </div>
+          )}
+          
+          {myActiveOrderNo && (
+            <div className={styles.myOrderSection}>
+              <div className={styles.myOrderLabel}>あなたの待ち番号</div>
+              <div className={styles.myOrderBox}>
+                <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
+                <button 
+                  className={styles.clearMyOrderBtn}
+                  onClick={() => {
+                    setMyActiveOrderNo(null);
+                    localStorage.removeItem('kenohi_my_order_no');
+                  }}
+                  title="受取完了して番号を消す"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

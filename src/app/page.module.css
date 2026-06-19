@@ -505,11 +505,17 @@
   padding: 12px 20px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: 12px;
   animation: slideDown var(--transition-normal);
   border-bottom: 2px solid var(--accent-pink);
   box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.calledSection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .callBannerTitle {
@@ -524,6 +530,56 @@
   font-weight: 900;
   letter-spacing: 0.1em;
   color: var(--accent-pink);
+}
+
+/* My Order Section */
+.myOrderSection {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.myOrderLabel {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.myOrderBox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.myOrderNumber {
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #fff;
+  background-color: var(--primary-green);
+  padding: 4px 12px;
+  border-radius: 8px;
+}
+
+.clearMyOrderBtn {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.clearMyOrderBtn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 @keyframes slideDown {
