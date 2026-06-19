@@ -172,6 +172,13 @@ export default function Home() {
     closeOptionModal();
   };
 
+  const handleRemoveFromCart = (indexToRemove: number) => {
+    setCart((prev) => prev.filter((_, index) => index !== indexToRemove));
+    if (cart.length <= 1) {
+      setShowCartDetail(false);
+    }
+  };
+
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     setIsSubmitting(true);
@@ -279,16 +286,6 @@ export default function Home() {
               <div className={styles.myOrderLabel}>あなたの待ち番号</div>
               <div className={styles.myOrderBox}>
                 <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
-                <button 
-                  className={styles.clearMyOrderBtn}
-                  onClick={() => {
-                    setMyActiveOrderNo(null);
-                    localStorage.removeItem('kenohi_my_order_no');
-                  }}
-                  title="受取完了して番号を消す"
-                >
-                  <X size={16} />
-                </button>
               </div>
             </div>
           )}
@@ -442,7 +439,16 @@ export default function Home() {
                     </span>
                     <span className={styles.cartItemOptions}>数量: {item.quantity}</span>
                   </div>
-                  <span className={styles.cartItemPrice}>¥{item.price * item.quantity}</span>
+                  <div className={styles.cartItemRight}>
+                    <span className={styles.cartItemPrice}>¥{item.price * item.quantity}</span>
+                    <button 
+                      className={styles.removeCartItemBtn} 
+                      onClick={() => handleRemoveFromCart(idx)}
+                      title="この商品をキャンセル"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
