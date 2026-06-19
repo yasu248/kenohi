@@ -99,6 +99,7 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [calledOrders, setCalledOrders] = useState<string[]>([]);
   const [myActiveOrderNo, setMyActiveOrderNo] = useState<string | null>(null);
+  const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
 
   // Initialize LIFF
   useEffect(() => {
@@ -124,21 +125,32 @@ export default function Home() {
 
   // 呼び出し中の注文を取得（5秒ごと）
   useEffect(() => {
-    const fetchCalledOrders = async () => {
+    const fetchOrders = async () => {
       try {
         const res = await fetch('/api/orders');
         if (!res.ok) return;
         const all = await res.json();
+        
         const called = all
           .filter((o: any) => o.status === 'completed')
           .map((o: any) => o.orderNumber);
         setCalledOrders(called);
+
+        if (myActiveOrderNo) {
+          const myOrder = all.find((o: any) => o.orderNumber === myActiveOrderNo);
+          if (myOrder) {
+            setMyOrderStatus(myOrder.status === 'completed' ? 'called' : 'waiting');
+          } else {
+            // 一覧にない場合は受渡完了（またはキャンセル）とみなす
+            setMyOrderStatus('received');
+          }
+        }
       } catch (err) {}
     };
-    fetchCalledOrders();
-    const id = setInterval(fetchCalledOrders, 5000);
+    fetchOrders();
+    const id = setInterval(fetchOrders, 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [myActiveOrderNo]);
 
   const openOptionModal = (item: MenuItem) => {
     setSelectedItem(item);
@@ -215,13 +227,41 @@ export default function Home() {
   if (orderCompleteNo) {
     return (
       <main className={styles.container}>
-        {/* Called Orders Banner */}
-        {calledOrders.length > 0 && (
+        {/* Called Orders Banner (Success Screen) */}
+        {(calledOrders.length > 0 || myActiveOrderNo) && (
           <div className={styles.callBanner}>
-            <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
-            <div className={styles.callBannerNumbers}>
-              {calledOrders.join(' , ')}
-            </div>
+            {calledOrders.length > 0 && (
+              <div className={styles.calledSection}>
+                <div className={styles.callBannerTitle}>現在のお呼び出し番号</div>
+                <div className={styles.callBannerNumbers}>
+                  {calledOrders.join(' , ')}
+                </div>
+              </div>
+            )}
+            
+            {myActiveOrderNo && (
+              <div className={`${styles.myOrderSection} ${myOrderStatus === 'received' ? styles.receivedSection : ''}`}>
+                <div className={styles.myOrderLabel}>
+                  {myOrderStatus === 'received' ? 'お受け取り完了 (ありがとうございました！)' : 'あなたの待ち番号'}
+                </div>
+                <div className={styles.myOrderBox}>
+                  <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
+                  {myOrderStatus === 'received' && (
+                    <button 
+                      className={styles.dismissBtn}
+                      onClick={() => {
+                        setMyActiveOrderNo(null);
+                        setMyOrderStatus(null);
+                        localStorage.removeItem('kenohi_my_order_no');
+                      }}
+                      title="閉じる"
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
         <div className={styles.successContainer}>
@@ -281,10 +321,25 @@ export default function Home() {
           )}
           
           {myActiveOrderNo && (
-            <div className={styles.myOrderSection}>
-              <div className={styles.myOrderLabel}>あなたの待ち番号</div>
+            <div className={`${styles.myOrderSection} ${myOrderStatus === 'received' ? styles.receivedSection : ''}`}>
+              <div className={styles.myOrderLabel}>
+                {myOrderStatus === 'received' ? 'お受け取り完了 (ありがとうございました！)' : 'あなたの待ち番号'}
+              </div>
               <div className={styles.myOrderBox}>
                 <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
+                {myOrderStatus === 'received' && (
+                  <button 
+                    className={styles.dismissBtn}
+                    onClick={() => {
+                      setMyActiveOrderNo(null);
+                      setMyOrderStatus(null);
+                      localStorage.removeItem('kenohi_my_order_no');
+                    }}
+                    title="閉じる"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
               </div>
             </div>
           )}
