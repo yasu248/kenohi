@@ -610,6 +610,28 @@
   background-color: rgba(255, 255, 255, 0.2);
 }
 
+.groupsAheadText {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+  margin-top: 12px;
+  background-color: rgba(255, 255, 255, 0.6);
+  padding: 8px 16px;
+  border-radius: 20px;
+  display: inline-block;
+}
+
+.groupsAheadBadge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  background-color: var(--card-bg);
+  color: var(--primary-dark);
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-left: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
 @keyframes slideDown {
   from { transform: translateY(-100%); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }

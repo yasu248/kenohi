@@ -100,6 +100,7 @@ export default function Home() {
   const [calledOrders, setCalledOrders] = useState<string[]>([]);
   const [myActiveOrderNo, setMyActiveOrderNo] = useState<string | null>(null);
   const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
+  const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
 
   // Initialize LIFF
   useEffect(() => {
@@ -140,9 +141,17 @@ export default function Home() {
           const myOrder = all.find((o: any) => o.orderNumber === myActiveOrderNo);
           if (myOrder) {
             setMyOrderStatus(myOrder.status === 'completed' ? 'called' : 'waiting');
+            if (myOrder.status === 'completed') {
+              setGroupsAhead(0);
+            } else {
+              const queue = all.filter((o: any) => o.status === 'pending' || o.status === 'preparing');
+              const index = queue.findIndex((o: any) => o.orderNumber === myActiveOrderNo);
+              setGroupsAhead(index >= 0 ? index : null);
+            }
           } else {
             // 一覧にない場合は受渡完了（またはキャンセル）とみなす
             setMyOrderStatus('received');
+            setGroupsAhead(null);
           }
         }
       } catch (err) {}
@@ -246,6 +255,11 @@ export default function Home() {
                 </div>
                 <div className={styles.myOrderBox}>
                   <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
+                  {myOrderStatus === 'waiting' && groupsAhead !== null && (
+                    <span className={styles.groupsAheadBadge}>
+                      {groupsAhead > 0 ? `前 ${groupsAhead} 組` : 'まもなく'}
+                    </span>
+                  )}
                   {myOrderStatus === 'received' && (
                     <button 
                       className={styles.dismissBtn}
@@ -276,6 +290,11 @@ export default function Home() {
           <div className={styles.orderNoBox}>
             <span className={styles.orderNoLabel}>注文呼出番号</span>
             <div className={styles.orderNoValue}>{orderCompleteNo}</div>
+            {myOrderStatus === 'waiting' && groupsAhead !== null && (
+              <div className={styles.groupsAheadText}>
+                {groupsAhead > 0 ? `あなたの前に ${groupsAhead} 組お待ちです` : 'まもなくお呼び出しです'}
+              </div>
+            )}
           </div>
 
           <button className={styles.actionButton} onClick={() => setOrderCompleteNo(null)}>
@@ -327,6 +346,11 @@ export default function Home() {
               </div>
               <div className={styles.myOrderBox}>
                 <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
+                {myOrderStatus === 'waiting' && groupsAhead !== null && (
+                  <span className={styles.groupsAheadBadge}>
+                    {groupsAhead > 0 ? `前 ${groupsAhead} 組` : 'まもなく'}
+                  </span>
+                )}
                 {myOrderStatus === 'received' && (
                   <button 
                     className={styles.dismissBtn}
