@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock } from 'lucide-react';
+import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
 
@@ -146,6 +146,10 @@ export default function KitchenMonitor() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
+            <BarChart size={16} />
+            売上・履歴
+          </button>
           <button className={styles.navLink} onClick={handleClearOrders} title="注文クリア">
             <Trash2 size={16} />
             全注文クリア
