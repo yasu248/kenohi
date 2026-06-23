@@ -30,6 +30,14 @@ export default function KitchenMonitor() {
     }
   }, []);
 
+  // セッションストレージから認証状態を復元
+  useEffect(() => {
+    const auth = sessionStorage.getItem('kitchen_auth');
+    if (auth === 'true') {
+      setAuthed(true);
+    }
+  }, []);
+
   // 認証後にポーリング開始
   useEffect(() => {
     if (!authed) return;
@@ -41,6 +49,7 @@ export default function KitchenMonitor() {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordInput === KITCHEN_PASSWORD) {
+      sessionStorage.setItem('kitchen_auth', 'true');
       setAuthed(true);
       setPasswordError(false);
     } else {
@@ -156,7 +165,10 @@ export default function KitchenMonitor() {
           </button>
           <button
             className={styles.navLink}
-            onClick={() => setAuthed(false)}
+            onClick={() => {
+              sessionStorage.removeItem('kitchen_auth');
+              setAuthed(false);
+            }}
             title="ログアウト"
           >
             <Lock size={16} />

@@ -31,32 +31,12 @@ interface DailySummary {
 
 export default function HistoryPage() {
   const router = useRouter();
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
 
-  // 認証チェック
   useEffect(() => {
-    const auth = sessionStorage.getItem('kitchen_auth');
-    if (auth === 'true') {
-      setIsAuthenticated(true);
-      fetchHistory();
-    } else {
-      setIsLoading(false);
-    }
+    fetchHistory();
   }, []);
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (password === 'kanade2024') {
-      sessionStorage.setItem('kitchen_auth', 'true');
-      setIsAuthenticated(true);
-      fetchHistory();
-    } else {
-      alert('パスワードが間違っています');
-    }
-  };
 
   const fetchHistory = async () => {
     setIsLoading(true);
@@ -121,28 +101,7 @@ export default function HistoryPage() {
     );
   };
 
-  if (!isAuthenticated) {
-    return (
-      <div className={styles.authContainer}>
-        <div className={styles.authCard}>
-          <h1 style={{ marginBottom: '20px', color: '#1e293b' }}>履歴画面ログイン</h1>
-          <form onSubmit={handleLogin}>
-            <input
-              type="password"
-              placeholder="パスワードを入力"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className={styles.authInput}
-              autoFocus
-            />
-            <button type="submit" className={styles.authButton}>
-              ログイン
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
+
 
   return (
     <div className={styles.container}>
