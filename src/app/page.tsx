@@ -71,7 +71,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: 'ほうじ茶ミルクティー',
     desc: '香ばしく煎り上げたほうじ茶の豊かな香りと、コクのあるミルクが絶妙に調和した人気の一杯。',
     price: 400,
-    image: 'https://images.unsplash.com/photo-1597838812864-411a2f65a25e?w=300',
+    image: 'https://images.unsplash.com/photo-1558160074-4d7d8bdf4256?w=300',
     category: 'milk',
     options: MILK_OPTIONS,
   },
