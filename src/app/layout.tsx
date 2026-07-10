@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "日本茶ミルクティー 和 - KANADE | モバイルオーダー",
-  description: "釜炒り茶ミルクティーなど、こだわりの日本茶ミルクティー専門店のモバイルオーダーシステム。ブラウザ版・LINEミニアプリ共通。",
+  title: "けのちゃ | モバイルオーダー",
+  description: "けのちゃのモバイルオーダーシステム。ブラウザ版・LINEミニアプリ共通。",
 };
 
 export default function RootLayout({

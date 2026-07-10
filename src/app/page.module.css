@@ -29,17 +29,15 @@
   flex-direction: column;
 }
 
-.brandName {
-  font-size: 1.25rem;
-  font-weight: 800;
-  color: var(--primary-dark);
-  letter-spacing: 0.05em;
+.brandLogoContainer {
+  display: flex;
+  align-items: center;
 }
 
-.brandSub {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-top: 2px;
+.brandLogo {
+  height: 40px; /* Adjust height based on the logo's aspect ratio */
+  width: auto;
+  object-fit: contain;
 }
 
 .userProfile {

@@ -116,7 +116,7 @@ export default function Home() {
       }
     }
     init();
-    
+
     // 過去の自分の注文番号を復元
     const savedOrderNo = localStorage.getItem('kenohi_my_order_no');
     if (savedOrderNo) {
@@ -131,7 +131,7 @@ export default function Home() {
         const res = await fetch('/api/orders');
         if (!res.ok) return;
         const all = await res.json();
-        
+
         const called = all
           .filter((o: any) => o.status === 'completed')
           .map((o: any) => o.orderNumber);
@@ -154,7 +154,7 @@ export default function Home() {
             setGroupsAhead(null);
           }
         }
-      } catch (err) {}
+      } catch (err) { }
     };
     fetchOrders();
     const id = setInterval(fetchOrders, 5000);
@@ -219,7 +219,7 @@ export default function Home() {
       setOrderCompleteNo(order.orderNumber);
       setMyActiveOrderNo(order.orderNumber);
       localStorage.setItem('kenohi_my_order_no', order.orderNumber);
-      
+
       setCart([]);
       setShowCartDetail(false);
     } catch (err) {
@@ -247,7 +247,7 @@ export default function Home() {
                 </div>
               </div>
             )}
-            
+
             {myActiveOrderNo && (
               <div className={`${styles.myOrderSection} ${myOrderStatus === 'received' ? styles.receivedSection : ''}`}>
                 <div className={styles.myOrderLabel}>
@@ -257,11 +257,11 @@ export default function Home() {
                   <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
                   {myOrderStatus === 'waiting' && groupsAhead !== null && (
                     <span className={styles.groupsAheadBadge}>
-                      {groupsAhead > 0 ? `前 ${groupsAhead} 組` : 'まもなく'}
+                      {groupsAhead > 0 ? `前に ${groupsAhead} 組` : 'まもなく'}
                     </span>
                   )}
                   {myOrderStatus === 'received' && (
-                    <button 
+                    <button
                       className={styles.dismissBtn}
                       onClick={() => {
                         setMyActiveOrderNo(null);
@@ -310,8 +310,9 @@ export default function Home() {
       {/* Brand Header */}
       <header className={styles.header}>
         <div className={styles.brand}>
-          <span className={styles.brandName}>茶庵 和 - KANADE</span>
-          <span className={styles.brandSub}>Japanese Tea Milk Tea Specialist</span>
+          <div className={styles.brandLogoContainer}>
+            <img src="/logo.png" alt="けのちゃ KENOCHA" className={styles.brandLogo} />
+          </div>
         </div>
         {profile && (
           <div className={styles.userProfile}>
@@ -338,7 +339,7 @@ export default function Home() {
               </div>
             </div>
           )}
-          
+
           {myActiveOrderNo && (
             <div className={`${styles.myOrderSection} ${myOrderStatus === 'received' ? styles.receivedSection : ''}`}>
               <div className={styles.myOrderLabel}>
@@ -348,11 +349,11 @@ export default function Home() {
                 <span className={styles.myOrderNumber}>{myActiveOrderNo}</span>
                 {myOrderStatus === 'waiting' && groupsAhead !== null && (
                   <span className={styles.groupsAheadBadge}>
-                    {groupsAhead > 0 ? `前 ${groupsAhead} 組` : 'まもなく'}
+                    {groupsAhead > 0 ? `前に ${groupsAhead} 組` : 'まもなく'}
                   </span>
                 )}
                 {myOrderStatus === 'received' && (
-                  <button 
+                  <button
                     className={styles.dismissBtn}
                     onClick={() => {
                       setMyActiveOrderNo(null);
@@ -544,8 +545,8 @@ export default function Home() {
                   </div>
                   <div className={styles.cartItemRight}>
                     <span className={styles.cartItemPrice}>¥{item.price * item.quantity}</span>
-                    <button 
-                      className={styles.removeCartItemBtn} 
+                    <button
+                      className={styles.removeCartItemBtn}
                       onClick={() => handleRemoveFromCart(idx)}
                       title="この商品をキャンセル"
                     >
