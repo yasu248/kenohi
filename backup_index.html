@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日本茶ミルクティー Order</title>
+    <style>
+        :root {
+            --primary-green: #A3B18A;
+            /* 釜炒り茶をイメージした落ち着いた緑 */
+            --accent-pink: #F4ACB7;
+            /* 若い女性向けのアクセントピンク */
+            --bg-cream: #FDFBFA;
+            /* 柔らかな背景色 */
+            --text-main: #4A4A4A;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
+            background-color: var(--bg-cream);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .order-card {
+            background: white;
+            border-radius: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+            width: 100%;
+            max-width: 380px;
+            overflow: hidden;
+            border: 1px solid #f0f0f0;
+        }
+
+        .product-image {
+            width: 100%;
+            height: 240px;
+            background-color: #E9EDC9;
+            /* 画像がない時のダミー色 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.1rem;
+            color: var(--primary-green);
+            font-weight: bold;
+        }
+
+        .content {
+            padding: 25px;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 1.4rem;
+            letter-spacing: 0.05em;
+        }
+
+        .price-tag {
+            color: var(--primary-green);
+            font-weight: bold;
+            font-size: 1.3rem;
+            margin: 10px 0 20px 0;
+        }
+
+        .selection-group {
+            margin-bottom: 20px;
+        }
+
+        .group-title {
+            font-size: 0.85rem;
+            font-weight: bold;
+            margin-bottom: 12px;
+            display: block;
+            color: #888;
+        }
+
+        .options {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .options input {
+            display: none;
+        }
+
+        .options label {
+            border: 1.5px solid #eee;
+            padding: 10px 18px;
+            border-radius: 30px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .options input:checked+label {
+            background-color: var(--primary-green);
+            color: white;
+            border-color: var(--primary-green);
+        }
+
+        .add-to-cart {
+            background-color: var(--accent-pink);
+            color: white;
+            border: none;
+            width: 100%;
+            padding: 18px;
+            border-radius: 35px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin-top: 15px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(244, 172, 183, 0.4);
+            transition: transform 0.2s;
+        }
+
+        .add-to-cart:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="order-card">
+        <div class="product-image">
+            [ここにミルクティーの画像]
+        </div>
+
+        <div class="content">
+            <h2>釜炒り茶ミルクティー</h2>
+            <div class="price-tag">¥350</div>
+
+            <div class="selection-group">
+                <span class="group-title">甘さ</span>
+                <div class="options">
+                    <input type="radio" name="sweet" id="s1" checked><label for="s1">ふつう</label>
+                    <input type="radio" name="sweet" id="s2"><label for="s2">ひかえめ</label>
+                    <input type="radio" name="sweet" id="s3"><label for="s3">なし</label>
+                </div>
+            </div>
+
+            <div class="selection-group">
+                <span class="group-title">氷の量</span>
+                <div class="options">
+                    <input type="radio" name="ice" id="i1" checked><label for="i1">ふつう</label>
+                    <input type="radio" name="ice" id="i2"><label for="i2">少なめ</label>
+                    <input type="radio" name="ice" id="i3"><label for="i3">なし</label>
+                </div>
+            </div>
+
+            <button class="add-to-cart" onclick="submitOrder()">カートに追加する</button>
+        </div>
+    </div>
+
+    <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script>
+        // LIFFの初期化（本番ではYOUR_LIFF_IDを入れます）
+        async function initLine() {
+            try {
+                await liff.init({ liffId: "YOUR_LIFF_ID" });
+                if (!liff.isLoggedIn()) {
+                    liff.login();
+                }
+            } catch (err) {
+                console.log("LIFF初期化エラー（ブラウザテスト用）");
+            }
+        }
+
+        function submitOrder() {
+            // ここで選択された値を取得し、決済へ飛ばす処理を書きます
+            alert("カートに追加しました！幸せの香りが届くまであと少しです。");
+        }
+
+        // ページ読み込み時に実行
+        // initLine();
+    </script>
+</body>
+
+</html>
