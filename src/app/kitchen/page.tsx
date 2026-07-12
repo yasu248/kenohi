@@ -7,7 +7,7 @@ import type { Order } from '../../lib/store';
 
 // キッチン画面へのアクセスパスワード
 // 本番環境では環境変数や認証サービスに差し替えてください
-const KITCHEN_PASSWORD = 'kanade2024';
+const KITCHEN_PASSWORD = 'kenohi2026';
 const POLL_INTERVAL_MS = 2000; // 2秒ごとにポーリング
 
 export default function KitchenMonitor() {
