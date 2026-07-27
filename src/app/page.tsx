@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { ShoppingBag, X, Plus, Minus, Check, CreditCard, ChevronRight } from 'lucide-react';
 import styles from './page.module.css';
 import { liffManager, LiffUserProfile } from '../lib/liffHelper';
@@ -124,6 +125,44 @@ export default function Home() {
     }
   }, []);
 
+  // Stripe決済成功時のリダイレクト処理
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get('success');
+    const orderNo = params.get('order_no');
+    const sessionId = params.get('session_id');
+
+    if (success === 'true' && orderNo && sessionId) {
+      const confirmPayment = async () => {
+        try {
+          const res = await fetch('/api/orders/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+          });
+          
+          if (res.ok) {
+            setOrderCompleteNo(orderNo);
+            setMyActiveOrderNo(orderNo);
+            localStorage.setItem('kenohi_my_order_no', orderNo);
+            setCart([]);
+            setShowCartDetail(false);
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } else {
+            console.error('Payment confirmation failed');
+            alert('決済確認に失敗しました。注文状況をご確認ください。');
+          }
+        } catch (e) {
+          console.error('Error confirming payment:', e);
+        }
+      };
+      confirmPayment();
+    } else if (params.get('cancelled') === 'true') {
+      alert('決済がキャンセルされました。');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   // 呼び出し中の注文を取得（5秒ごと）
   useEffect(() => {
     const fetchOrders = async () => {
@@ -207,25 +246,23 @@ export default function Home() {
     const customerAvatar = profile?.pictureUrl || undefined;
 
     try {
-      const res = await fetch('/api/orders', {
+      const res = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: cart, customerName, customerAvatar }),
       });
 
-      if (!res.ok) throw new Error('注文の送信に失敗しました');
+      if (!res.ok) throw new Error('注文セッションの作成に失敗しました');
 
-      const order = await res.json();
-      setOrderCompleteNo(order.orderNumber);
-      setMyActiveOrderNo(order.orderNumber);
-      localStorage.setItem('kenohi_my_order_no', order.orderNumber);
-
-      setCart([]);
-      setShowCartDetail(false);
+      const { url } = await res.json();
+      if (url) {
+        window.location.href = url;
+      } else {
+        throw new Error('決済URLが取得できませんでした');
+      }
     } catch (err) {
       console.error(err);
       alert('注文の送信に失敗しました。もう一度お試しください。');
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -394,6 +431,17 @@ export default function Home() {
           </div>
         ))}
       </section>
+
+      {/* Main Page Footer */}
+      <footer className={styles.mainFooter}>
+        <Link href="/legal" className={styles.footerLink}>
+          特定商取引法に基づく表記
+        </Link>
+        <span className={styles.footerDivider}>|</span>
+        <Link href="/privacy" className={styles.footerLink}>
+          プライバシーポリシー
+        </Link>
+      </footer>
 
       {/* Drink Options Modal Sheet */}
       {selectedItem && (
@@ -575,6 +623,17 @@ export default function Home() {
             >
               {isSubmitting ? '決済手続き中...' : `注文を確定する (¥${cartTotalPrice})`}
             </button>
+            <div className={styles.legalAgreement}>
+              ご注文を確定することにより、
+              <Link href="/legal" className={styles.legalLink}>
+                特定商取引法に基づく表記
+              </Link>
+              および
+              <Link href="/privacy" className={styles.legalLink}>
+                プライバシーポリシー
+              </Link>
+              に同意したものとみなされます。
+            </div>
           </div>
         </div>
       )}

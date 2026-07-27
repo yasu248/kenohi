@@ -1,0 +1,136 @@
+.container {
+  min-height: 100vh;
+  background-color: var(--bg-cream);
+  color: var(--text-main);
+  padding: 24px 16px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.wrapper {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  animation: fadeIn var(--transition-normal);
+}
+
+.nav {
+  margin-bottom: 24px;
+}
+
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color var(--transition-fast);
+}
+
+.backBtn:hover {
+  color: var(--primary-dark);
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.iconWrapper {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background-color: var(--primary-light);
+  color: var(--primary-dark);
+  margin-bottom: 16px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.tableCard {
+  background-color: var(--card-bg);
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  margin-bottom: 32px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary-dark);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  letter-spacing: 0.05em;
+}
+
+.value {
+  font-size: 14px;
+  color: var(--text-main);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.value p {
+  margin-bottom: 4px;
+}
+
+.value p:last-child {
+  margin-bottom: 0;
+}
+
+.footer {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 16px 0;
+}
+
+/* Responsive table layout for larger screens if accessed via desktop browser */
+@media (min-width: 480px) {
+  .row {
+    flex-direction: row;
+    padding: 20px 24px;
+  }
+
+  .label {
+    width: 160px;
+    flex-shrink: 0;
+    margin-bottom: 0;
+    font-size: 13px;
+  }
+
+  .value {
+    flex-grow: 1;
+    font-size: 14px;
+  }
+}

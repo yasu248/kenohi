@@ -27,7 +27,7 @@ export interface Order {
   totalPrice: number;
   customerName: string;
   customerAvatar?: string;
-  status: 'pending' | 'preparing' | 'completed' | 'cancelled';
+  status: 'unpaid' | 'pending' | 'preparing' | 'completed' | 'cancelled';
   createdAt: string;
   orderNumber: string;
 }
@@ -59,6 +59,7 @@ export async function getOrders(): Promise<Order[]> {
     .from('orders')
     .select('*')
     .not('status', 'eq', 'cancelled')   // キャンセル済みは除外
+    .not('status', 'eq', 'unpaid')      // 未決済は除外
     .order('created_at', { ascending: true });
 
   if (error) throw new Error(`getOrders: ${error.message}`);
@@ -82,7 +83,7 @@ export async function addOrder(
     total_price: totalPrice,
     customer_name: customerName,
     customer_avatar: customerAvatar ?? null,
-    status: 'pending',
+    status: 'unpaid',
     order_number: generateOrderNumber(),
   };
 
