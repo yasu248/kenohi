@@ -7,7 +7,7 @@ import styles from './page.module.css';
 import { liffManager, LiffUserProfile } from '../lib/liffHelper';
 import type { OrderItem } from '../lib/store';
 
-type MenuCategory = 'straight' | 'milk';
+type MenuCategory = 'straight' | 'milk' | 'soda';
 
 interface MenuItem {
   id: string;
@@ -18,7 +18,7 @@ interface MenuItem {
   category: MenuCategory;
   options: {
     temperature?: string[]; // ストレートティー用
-    sweetness?: string[];   // ミルクティー用
+    sweetness?: string[];   // ミルクティー・炭酸用
   };
 }
 
@@ -27,6 +27,9 @@ const STRAIGHT_OPTIONS = { temperature: ['ホット', 'アイス'] };
 
 // ── ミルクティー（¥400） ─────────────────────────────────────
 const MILK_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
+
+// ── 炭酸ソーダ（¥350） ─────────────────────────────────────
+const SODA_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
 
 const MENU_ITEMS: MenuItem[] = [
   // ストレートティー 3種
@@ -42,7 +45,7 @@ const MENU_ITEMS: MenuItem[] = [
   {
     id: 's2',
     name: 'ほうじ茶ストレートティー',
-    desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。',
+    desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和 of 温かみを感じる一杯。',
     price: 250,
     image: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=300',
     category: 'straight',
@@ -84,6 +87,34 @@ const MENU_ITEMS: MenuItem[] = [
     image: 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?w=300',
     category: 'milk',
     options: MILK_OPTIONS,
+  },
+  // 炭酸（ソーダ） 3種
+  {
+    id: 'c1',
+    name: '緑茶炭酸ソーダ',
+    desc: '爽快な炭酸の泡が、緑茶特有の清涼感と爽やかな香りを引き立てるリフレッシュに最適な一杯。',
+    price: 350,
+    image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300',
+    category: 'soda',
+    options: SODA_OPTIONS,
+  },
+  {
+    id: 'c2',
+    name: 'ほうじ茶炭酸ソーダ',
+    desc: '香ばしいほうじ茶の風味と炭酸の刺激が出会った、新感覚ですっきりとした味わいの和風ソーダ。',
+    price: 350,
+    image: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=300',
+    category: 'soda',
+    options: SODA_OPTIONS,
+  },
+  {
+    id: 'c3',
+    name: '和青茶炭酸ソーダ',
+    desc: '華やかな香りの国産烏龍茶に炭酸をプラス。フルーティーなアロマが炭酸とともに弾ける一杯。',
+    price: 350,
+    image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300',
+    category: 'soda',
+    options: SODA_OPTIONS,
   },
 ];
 
@@ -222,7 +253,9 @@ export default function Home() {
     const optionDesc =
       selectedItem.category === 'straight'
         ? (temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`)
-        : `甘さ: ${sweetness}`;
+        : selectedItem.category === 'soda'
+          ? `ソーダ (甘さ: ${sweetness}, 氷: ${iceAmount})`
+          : `甘さ: ${sweetness}`;
 
     const newCartItem: OrderItem = {
       name: `${selectedItem.name} (${optionDesc})`,
@@ -482,8 +515,8 @@ export default function Home() {
               </div>
             )}
 
-            {/* ストレートティー（アイス）：氷の量選択 */}
-            {selectedItem.category === 'straight' && temperature === 'アイス' && (
+            {/* ストレートティー（アイス）、または炭酸：氷の量選択 */}
+            {((selectedItem.category === 'straight' && temperature === 'アイス') || selectedItem.category === 'soda') && (
               <div className={styles.optionSection}>
                 <span className={styles.optionTitle}>氷の量</span>
                 <div className={styles.optionsGrid}>
@@ -507,8 +540,8 @@ export default function Home() {
               </div>
             )}
 
-            {/* ミルクティー：甘さ選択 */}
-            {selectedItem.category === 'milk' && selectedItem.options.sweetness && (
+            {/* ミルクティー、または炭酸：甘さ選択 */}
+            {(selectedItem.category === 'milk' || selectedItem.category === 'soda') && selectedItem.options.sweetness && (
               <div className={styles.optionSection}>
                 <span className={styles.optionTitle}>甘さの調節</span>
                 <div className={styles.optionsGrid}>
