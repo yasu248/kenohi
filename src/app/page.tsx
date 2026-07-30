@@ -35,7 +35,7 @@ const MENU_ITEMS: MenuItem[] = [
   // ストレートティー 3種
   {
     id: 's1',
-    name: '緑茶ストレートティー',
+    name: '緑茶ストレート',
     desc: '丁寧に摘まれた国産茶葉を使用。清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。',
     price: 250,
     image: 'https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=300',
@@ -44,7 +44,7 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 's2',
-    name: 'ほうじ茶ストレートティー',
+    name: 'ほうじ茶ストレート',
     desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和 of 温かみを感じる一杯。',
     price: 250,
     image: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=300',
@@ -53,7 +53,7 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 's3',
-    name: '和青茶ストレートティー',
+    name: '和青茶ストレート',
     desc: '国産烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。',
     price: 250,
     image: 'https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=300',
@@ -91,7 +91,7 @@ const MENU_ITEMS: MenuItem[] = [
   // 炭酸（ソーダ） 3種
   {
     id: 'c1',
-    name: '緑茶炭酸ソーダ',
+    name: '炭酸緑茶',
     desc: '爽快な炭酸の泡が、緑茶特有の清涼感と爽やかな香りを引き立てるリフレッシュに最適な一杯。',
     price: 350,
     image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300',
@@ -100,7 +100,7 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 'c2',
-    name: 'ほうじ茶炭酸ソーダ',
+    name: '炭酸ほうじ茶',
     desc: '香ばしいほうじ茶の風味と炭酸の刺激が出会った、新感覚ですっきりとした味わいの和風ソーダ。',
     price: 350,
     image: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=300',
@@ -109,7 +109,7 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 'c3',
-    name: '和青茶炭酸ソーダ',
+    name: '炭酸和青茶',
     desc: '華やかな香りの国産烏龍茶に炭酸をプラス。フルーティーなアロマが炭酸とともに弾ける一杯。',
     price: 350,
     image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300',
@@ -171,7 +171,7 @@ export default function Home() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId }),
           });
-          
+
           if (res.ok) {
             setOrderCompleteNo(orderNo);
             setMyActiveOrderNo(orderNo);
