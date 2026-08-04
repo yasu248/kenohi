@@ -88,34 +88,34 @@ const MENU_ITEMS: MenuItem[] = [
     category: 'milk',
     options: MILK_OPTIONS,
   },
-  // 炭酸（ソーダ） 3種
-  {
-    id: 'c1',
-    name: '炭酸緑茶',
-    desc: '爽快な炭酸の泡が、緑茶特有の清涼感と爽やかな香りを引き立てるリフレッシュに最適な一杯。',
-    price: 350,
-    image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300',
-    category: 'soda',
-    options: SODA_OPTIONS,
-  },
-  {
-    id: 'c2',
-    name: '炭酸ほうじ茶',
-    desc: '香ばしいほうじ茶の風味と炭酸の刺激が出会った、新感覚ですっきりとした味わいの和風ソーダ。',
-    price: 350,
-    image: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=300',
-    category: 'soda',
-    options: SODA_OPTIONS,
-  },
-  {
-    id: 'c3',
-    name: '炭酸和青茶',
-    desc: '華やかな香りの国産烏龍茶に炭酸をプラス。フルーティーなアロマが炭酸とともに弾ける一杯。',
-    price: 350,
-    image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300',
-    category: 'soda',
-    options: SODA_OPTIONS,
-  },
+  // 炭酸（ソーダ） 3種　（一旦メニューから除外）
+  // {
+  //   id: 'c1',
+  //   name: '炭酸緑茶',
+  //   desc: '爽快な炭酸の泡が、緑茶特有の清涼感と爽やかな香りを引き立てるリフレッシュに最適な一杯。',
+  //   price: 350,
+  //   image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300',
+  //   category: 'soda',
+  //   options: SODA_OPTIONS,
+  // },
+  // {
+  //   id: 'c2',
+  //   name: '炭酸ほうじ茶',
+  //   desc: '香ばしいほうじ茶の風味と炭酸の刺激が出会った、新感覚ですっきりとした味わいの和風ソーダ。',
+  //   price: 350,
+  //   image: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=300',
+  //   category: 'soda',
+  //   options: SODA_OPTIONS,
+  // },
+  // {
+  //   id: 'c3',
+  //   name: '炭酸和青茶',
+  //   desc: '華やかな香りの国産烏龍茶に炭酸をプラス。フルーティーなアロマが炭酸とともに弾ける一杯。',
+  //   price: 350,
+  //   image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300',
+  //   category: 'soda',
+  //   options: SODA_OPTIONS,
+  // },
 ];
 
 export default function Home() {
