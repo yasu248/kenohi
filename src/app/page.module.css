@@ -7,12 +7,13 @@
   flex-direction: column;
   position: relative;
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.02);
-  padding-bottom: 90px; /* Space for sticky cart button */
+  padding-bottom: 90px;
+  /* Space for sticky cart button */
 }
 
 /* Header Styling */
 .header {
-  padding: 16px 20px;
+  padding: 5px 18px;
   background-color: var(--card-bg);
   border-bottom: 1px solid var(--border-color);
   position: sticky;
@@ -35,7 +36,8 @@
 }
 
 .brandLogo {
-  height: 40px; /* Adjust height based on the logo's aspect ratio */
+  height: 60px;
+  /* ヘッダーにギリギリハマる大きさに調整 */
   width: auto;
   object-fit: contain;
 }
@@ -186,8 +188,13 @@
 }
 
 @keyframes slideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
 }
 
 .modalHeader {
@@ -250,7 +257,7 @@
   background-color: var(--card-bg);
 }
 
-.optionChip:checked + .optionLabel {
+.optionChip:checked+.optionLabel {
   background-color: var(--primary-green);
   color: white;
   border-color: var(--primary-green);
@@ -529,7 +536,7 @@
   gap: 12px;
   animation: slideDown var(--transition-normal);
   border-bottom: 2px solid var(--accent-pink);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
 }
 
 .calledSection {
@@ -631,8 +638,15 @@
 }
 
 @keyframes slideDown {
-  from { transform: translateY(-100%); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* Main Page Footer */
@@ -681,4 +695,3 @@
   color: var(--text-muted);
   font-size: 13px;
 }
-
