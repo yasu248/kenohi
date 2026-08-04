@@ -381,7 +381,7 @@ export default function Home() {
       <header className={styles.header}>
         <div className={styles.brand}>
           <div className={styles.brandLogoContainer}>
-            <img src="/logo.png" alt="けのちゃ KENOCHA" className={styles.brandLogo} />
+            <img src="/IconLineApp.png" alt="けのちゃ" className={styles.brandLogo} />
           </div>
         </div>
         {profile && (
