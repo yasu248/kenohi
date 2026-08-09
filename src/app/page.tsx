@@ -660,9 +660,9 @@ export default function Home() {
               </div>
             )}
 
-            {/* お茶ゼリー追加 */}
+            {/* トッピング追加 */}
             <div className={styles.optionSection}>
-              <span className={styles.optionTitle}>お茶ゼリー追加</span>
+              <span className={styles.optionTitle}>トッピング追加</span>
               <div className={styles.optionsGrid}>
                 {[
                   { value: 'なし', label: 'なし' },
