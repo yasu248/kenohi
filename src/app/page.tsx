@@ -125,6 +125,9 @@ export default function Home() {
   const [temperature, setTemperature] = useState('ホット'); // ストレートティー用
   const [iceAmount, setIceAmount] = useState('ふつう');     // 氷の量
   const [quantity, setQuantity] = useState(1);
+  const [size, setSize] = useState('M'); // M or L
+  const [jelly, setJelly] = useState('なし'); // なし, 緑茶ゼリー, ほうじ茶ゼリー, 青茶ゼリー
+  const [syrup, setSyrup] = useState('ノーマル'); // ノーマル, バラ, 金木犀
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [showCartDetail, setShowCartDetail] = useState(false);
   const [orderCompleteNo, setOrderCompleteNo] = useState<string | null>(null);
@@ -133,6 +136,21 @@ export default function Home() {
   const [myActiveOrderNo, setMyActiveOrderNo] = useState<string | null>(null);
   const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
   const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
+
+  const getUnitPrice = (item: MenuItem) => {
+    let price = item.price;
+    if (size === 'L') {
+      if (item.category === 'milk') {
+        price += 50;
+      } else {
+        price += 30; // straight and soda
+      }
+    }
+    if (jelly !== 'なし') {
+      price += 30;
+    }
+    return price;
+  };
 
   // Initialize LIFF
   useEffect(() => {
@@ -236,6 +254,9 @@ export default function Home() {
     setSweetness('ふつう');
     setTemperature('ホット');
     setIceAmount('ふつう');
+    setSize('M');
+    setJelly('なし');
+    setSyrup('ノーマル');
     setQuantity(1);
   };
 
@@ -250,16 +271,35 @@ export default function Home() {
   const handleAddToCart = () => {
     if (!selectedItem) return;
 
-    const optionDesc =
-      selectedItem.category === 'straight'
-        ? (temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`)
-        : selectedItem.category === 'soda'
-          ? `ソーダ (甘さ: ${sweetness}, 氷: ${iceAmount})`
-          : `甘さ: ${sweetness}`;
+    const unitPrice = getUnitPrice(selectedItem);
+
+    // オプション情報の組み立て
+    let optionsList = [];
+    optionsList.push(`サイズ: ${size === 'M' ? 'M(400ml)' : 'L(500ml)'}`);
+
+    if (selectedItem.category === 'straight') {
+      optionsList.push(temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`);
+    } else if (selectedItem.category === 'soda') {
+      optionsList.push(`ソーダ (氷: ${iceAmount})`);
+    }
+
+    if (selectedItem.category === 'milk' || selectedItem.category === 'soda') {
+      optionsList.push(`甘さ: ${sweetness}`);
+    }
+
+    if (selectedItem.category === 'milk') {
+      optionsList.push(`シロップ: ${syrup}`);
+    }
+
+    if (jelly !== 'なし') {
+      optionsList.push(`トッピング: ${jelly}(+¥30)`);
+    }
+
+    const optionDesc = optionsList.join(', ');
 
     const newCartItem: OrderItem = {
       name: `${selectedItem.name} (${optionDesc})`,
-      price: selectedItem.price,
+      price: unitPrice,
       quantity,
     };
 
@@ -483,7 +523,7 @@ export default function Home() {
             <div className={styles.modalHeader}>
               <div>
                 <h2 className={styles.modalTitle}>{selectedItem.name}</h2>
-                <div className={styles.modalPrice}>¥{selectedItem.price}</div>
+                <div className={styles.modalPrice}>¥{getUnitPrice(selectedItem)}</div>
               </div>
               <button className={styles.closeButton} onClick={closeOptionModal}>
                 <X size={24} />
@@ -564,6 +604,89 @@ export default function Home() {
                 </div>
               </div>
             )}
+
+            {/* サイズ選択 */}
+            <div className={styles.optionSection}>
+              <span className={styles.optionTitle}>サイズ</span>
+              <div className={styles.optionsGrid}>
+                {[
+                  { value: 'M', label: 'M (400ml)' },
+                  { value: 'L', label: `L (500ml) (+¥${selectedItem.category === 'milk' ? 50 : 30})` },
+                ].map((sz) => (
+                  <React.Fragment key={sz.value}>
+                    <input
+                      type="radio"
+                      id={`size-${sz.value}`}
+                      name="size"
+                      value={sz.value}
+                      checked={size === sz.value}
+                      onChange={() => setSize(sz.value)}
+                      className={styles.optionChip}
+                    />
+                    <label htmlFor={`size-${sz.value}`} className={styles.optionLabel}>
+                      {sz.label}
+                    </label>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+
+            {/* シロップ選択（ミルクティー限定） */}
+            {selectedItem.category === 'milk' && (
+              <div className={styles.optionSection}>
+                <span className={styles.optionTitle}>シロップ</span>
+                <div className={styles.optionsGrid}>
+                  {[
+                    { value: 'ノーマル', label: 'ノーマル' },
+                    { value: 'バラ', label: 'バラ' },
+                    { value: '金木犀', label: '金木犀' },
+                  ].map((srp) => (
+                    <React.Fragment key={srp.value}>
+                      <input
+                        type="radio"
+                        id={`syrup-${srp.value}`}
+                        name="syrup"
+                        value={srp.value}
+                        checked={syrup === srp.value}
+                        onChange={() => setSyrup(srp.value)}
+                        className={styles.optionChip}
+                      />
+                      <label htmlFor={`syrup-${srp.value}`} className={styles.optionLabel}>
+                        {srp.label}
+                      </label>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* お茶ゼリー追加 */}
+            <div className={styles.optionSection}>
+              <span className={styles.optionTitle}>お茶ゼリー追加</span>
+              <div className={styles.optionsGrid}>
+                {[
+                  { value: 'なし', label: 'なし' },
+                  { value: '緑茶ゼリー', label: '緑茶ゼリー (+¥30)' },
+                  { value: 'ほうじ茶ゼリー', label: 'ほうじ茶ゼリー (+¥30)' },
+                  { value: '青茶ゼリー', label: '青茶ゼリー (+¥30)' },
+                ].map((jl) => (
+                  <React.Fragment key={jl.value}>
+                    <input
+                      type="radio"
+                      id={`jelly-${jl.value}`}
+                      name="jelly"
+                      value={jl.value}
+                      checked={jelly === jl.value}
+                      onChange={() => setJelly(jl.value)}
+                      className={styles.optionChip}
+                    />
+                    <label htmlFor={`jelly-${jl.value}`} className={styles.optionLabel}>
+                      {jl.label}
+                    </label>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
 
             {/* 数量 */}
             <div className={styles.optionSection}>
