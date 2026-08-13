@@ -60,6 +60,15 @@ const MENU_ITEMS: MenuItem[] = [
     category: 'straight',
     options: STRAIGHT_OPTIONS,
   },
+  {
+    id: 's4',
+    name: '釜炒り茶ストレート',
+    desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。',
+    price: 250,
+    image: 'https://images.unsplash.com/photo-1597838812864-411a2f65a25e?w=300',
+    category: 'straight',
+    options: STRAIGHT_OPTIONS,
+  },
   // ミルクティー 3種
   {
     id: 'm1',
@@ -126,7 +135,7 @@ export default function Home() {
   const [iceAmount, setIceAmount] = useState('ふつう');     // 氷の量
   const [quantity, setQuantity] = useState(1);
   const [size, setSize] = useState('M'); // M or L
-  const [jelly, setJelly] = useState('なし'); // なし, 緑茶ゼリー, ほうじ茶ゼリー, 青茶ゼリー
+  const [jelly, setJelly] = useState('なし'); // なし, 緑茶ゼリー, ほうじ茶ゼリー, 青茶ゼリー, 釜炒り茶ゼリー
   const [syrup, setSyrup] = useState('ノーマル'); // ノーマル, バラ, 金木犀
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [showCartDetail, setShowCartDetail] = useState(false);
@@ -606,7 +615,7 @@ export default function Home() {
             )}
 
             {/* サイズ選択 */}
-            <div className={styles.optionSection}>
+            {/* <div className={styles.optionSection}>
               <span className={styles.optionTitle}>サイズ</span>
               <div className={styles.optionsGrid}>
                 {[
@@ -629,7 +638,7 @@ export default function Home() {
                   </React.Fragment>
                 ))}
               </div>
-            </div>
+            </div> */}
 
             {/* シロップ選択（ミルクティー限定） */}
             {selectedItem.category === 'milk' && (
@@ -669,6 +678,7 @@ export default function Home() {
                   { value: '緑茶ゼリー', label: '緑茶ゼリー (+¥30)' },
                   { value: 'ほうじ茶ゼリー', label: 'ほうじ茶ゼリー (+¥30)' },
                   { value: '青茶ゼリー', label: '青茶ゼリー (+¥30)' },
+                  { value: '釜炒り茶ゼリー', label: '釜炒り茶ゼリー (+¥30)' },
                 ].map((jl) => (
                   <React.Fragment key={jl.value}>
                     <input
