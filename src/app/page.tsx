@@ -62,7 +62,7 @@ const MENU_ITEMS: MenuItem[] = [
   },
   {
     id: 's4',
-    name: '釜炒り茶ストレート',
+    name: '釜炒り緑茶ストレート',
     desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。',
     price: 250,
     image: 'https://images.unsplash.com/photo-1597838812864-411a2f65a25e?w=300',
@@ -431,6 +431,7 @@ export default function Home() {
         <div className={styles.brand}>
           <div className={styles.brandLogoContainer}>
             <img src="/IconLineApp.png" alt="けのちゃ" className={styles.brandLogo} />
+            <img src="/kenocha_logo_text.png" alt="けのちゃ KENOCHA" className={styles.brandTextLogo} />
           </div>
         </div>
         {profile && (

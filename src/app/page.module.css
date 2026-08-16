@@ -33,6 +33,13 @@
 .brandLogoContainer {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+
+.brandTextLogo {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
 }
 
 .brandLogo {

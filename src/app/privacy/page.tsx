@@ -32,7 +32,7 @@ export default function PrivacyPage() {
     },
     {
       title: '6. お問い合わせ窓口',
-      content: '個人情報の取り扱いに関するお問い合わせは、以下の窓口までご連絡ください。\n運営会社：株式会社けのひ\nメールアドレス：kenohi2026@gmail.com'
+      content: '個人情報の取り扱いに関するお問い合わせは、以下の窓口までご連絡ください。\n運営会社：株式会社けのひ\nメールアドレス：kenocha@kenohi-inc.jp'
     }
   ];
 
