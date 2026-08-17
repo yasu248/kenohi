@@ -18,12 +18,26 @@ export default function KitchenMonitor() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // 注文データをAPIから取得
-  const fetchOrders = useCallback(async () => {
+  const fetchOrders = useCallback(async (isInitial = false) => {
     try {
       const res = await fetch('/api/orders');
       if (!res.ok) throw new Error('fetch error');
       const data: Order[] = await res.json();
-      setOrders(data);
+      
+      if (!isInitial) {
+        setOrders((prevOrders) => {
+          const prevPendingIds = new Set(prevOrders.filter((o) => o.status === 'pending').map((o) => o.id));
+          const hasNewPending = data.some((o) => o.status === 'pending' && !prevPendingIds.has(o.id));
+          
+          if (hasNewPending) {
+            const audio = new Audio('/chime.mp3');
+            audio.play().catch((err) => console.log('音声再生エラー:', err));
+          }
+          return data;
+        });
+      } else {
+        setOrders(data);
+      }
       setLastUpdated(new Date());
     } catch (err) {
       console.error('注文の取得に失敗しました', err);
@@ -41,8 +55,8 @@ export default function KitchenMonitor() {
   // 認証後にポーリング開始
   useEffect(() => {
     if (!authed) return;
-    fetchOrders(); // 初回即時取得
-    const timer = setInterval(fetchOrders, POLL_INTERVAL_MS);
+    fetchOrders(true); // 初回は音を鳴らさないようにする
+    const timer = setInterval(() => fetchOrders(false), POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [authed, fetchOrders]);
 
@@ -155,6 +169,16 @@ export default function KitchenMonitor() {
           </span>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            className={styles.navLink}
+            onClick={() => {
+              const audio = new Audio('/chime.mp3');
+              audio.play().catch(() => alert('ブラウザの保護機能により再生できませんでした。画面内を1度クリックしてから再度お試しください。'));
+            }}
+            title="音テスト"
+          >
+            音テスト 🔊
+          </button>
           <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
             <BarChart size={16} />
             売上・履歴
