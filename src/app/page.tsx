@@ -23,7 +23,7 @@ interface MenuItem {
 }
 
 // ── ストレートティー（¥250） ────────────────────────────────
-const STRAIGHT_OPTIONS = { temperature: ['ホット', 'アイス'] };
+const STRAIGHT_OPTIONS = { temperature: ['アイス', 'ホット'] };
 
 // ── ミルクティー（¥400） ─────────────────────────────────────
 const MILK_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
@@ -131,12 +131,12 @@ export default function Home() {
   const [profile, setProfile] = useState<LiffUserProfile | null>(null);
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const [sweetness, setSweetness] = useState('ふつう');   // ミルクティー用
-  const [temperature, setTemperature] = useState('ホット'); // ストレートティー用
+  const [temperature, setTemperature] = useState('アイス'); // ストレートティー用
   const [iceAmount, setIceAmount] = useState('ふつう');     // 氷の量
   const [quantity, setQuantity] = useState(1);
   const [size, setSize] = useState('M'); // M or L
   const [jelly, setJelly] = useState('なし'); // なし, 緑茶ゼリー, ほうじ茶ゼリー, 青茶ゼリー, 釜炒り茶ゼリー
-  const [syrup, setSyrup] = useState('ノーマル'); // ノーマル, バラ, 金木犀
+  const [syrup, setSyrup] = useState('ノーマル'); // ノーマル, ローズ, 金木犀
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [showCartDetail, setShowCartDetail] = useState(false);
   const [orderCompleteNo, setOrderCompleteNo] = useState<string | null>(null);
@@ -261,7 +261,7 @@ export default function Home() {
   const openOptionModal = (item: MenuItem) => {
     setSelectedItem(item);
     setSweetness('ふつう');
-    setTemperature('ホット');
+    setTemperature('アイス');
     setIceAmount('ふつう');
     setSize('M');
     setJelly('なし');
@@ -284,7 +284,7 @@ export default function Home() {
 
     // オプション情報の組み立て
     let optionsList = [];
-    optionsList.push(`サイズ: ${size === 'M' ? 'M(400ml)' : 'L(500ml)'}`);
+    optionsList.push('サイズ: 450ml');
 
     if (selectedItem.category === 'straight') {
       optionsList.push(temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`);
@@ -648,7 +648,7 @@ export default function Home() {
                 <div className={styles.optionsGrid}>
                   {[
                     { value: 'ノーマル', label: 'ノーマル' },
-                    { value: 'バラ', label: 'バラ' },
+                    { value: 'ローズ', label: 'ローズ' },
                     { value: '金木犀', label: '金木犀' },
                   ].map((srp) => (
                     <React.Fragment key={srp.value}>
