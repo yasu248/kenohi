@@ -35,6 +35,15 @@ const MENU_ITEMS: MenuItem[] = [
   // ストレートティー 3種
   {
     id: 's1',
+    name: '日替わり茶',
+    desc: '日替わりのストレートティー、本日の茶葉はスタッフまでお尋ねください\n※こちらはストレートティーのみのご提供となっております',
+    price: 250,
+    image: '/daily_special_tea.jpg',
+    category: 'straight',
+    options: STRAIGHT_OPTIONS,
+  },
+  {
+    id: 's2',
     name: '緑茶ストレート',
     desc: '清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。神奈川県丹沢の茶葉を使用。',
     price: 250,
@@ -43,7 +52,7 @@ const MENU_ITEMS: MenuItem[] = [
     options: STRAIGHT_OPTIONS,
   },
   {
-    id: 's2',
+    id: 's3',
     name: 'ほうじ茶ストレート',
     desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。滋賀県近江の茶葉を使用。',
     price: 250,
@@ -52,7 +61,7 @@ const MENU_ITEMS: MenuItem[] = [
     options: STRAIGHT_OPTIONS,
   },
   {
-    id: 's3',
+    id: 's4',
     name: '和青茶ストレート',
     desc: '烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。純国産の茶葉を使用。',
     price: 250,
@@ -61,7 +70,7 @@ const MENU_ITEMS: MenuItem[] = [
     options: STRAIGHT_OPTIONS,
   },
   {
-    id: 's4',
+    id: 's5',
     name: '釜炒り緑茶ストレート',
     desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。宮崎県五ヶ瀬の茶葉を使用。',
     price: 250,
