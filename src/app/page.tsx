@@ -32,11 +32,11 @@ const MILK_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
 const SODA_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
 
 const MENU_ITEMS: MenuItem[] = [
-  // ストレートティー 3種
+  // ストレートティー 
   {
     id: 's1',
-    name: '日替わり茶',
-    desc: '日替わりのストレートティー、本日の茶葉はスタッフまでお尋ねください\n※こちらはストレートティーのみのご提供となっております',
+    name: '本日のお茶',
+    desc: '日替わりのお茶、本日の茶葉はスタッフまでお尋ねください\n※こちらはストレートティーのみご提供しております',
     price: 250,
     image: '/daily_special_tea.jpg',
     category: 'straight',
