@@ -16,136 +16,108 @@ interface MenuItem {
   price: number;
   image: string;
   category: MenuCategory;
-  options: {
-    temperature?: string[]; // ストレートティー用
-    sweetness?: string[];   // ミルクティー・炭酸用
-  };
 }
-
-// ── ストレートティー（¥250） ────────────────────────────────
-const STRAIGHT_OPTIONS = { temperature: ['アイス', 'ホット'] };
-
-// ── ミルクティー（¥400） ─────────────────────────────────────
-const MILK_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
-
-// ── 炭酸ソーダ（¥350） ─────────────────────────────────────
-const SODA_OPTIONS = { sweetness: ['ふつう', 'ひかえめ', 'なし'] };
 
 const MENU_ITEMS: MenuItem[] = [
   // ストレートティー 
   {
     id: 's1',
     name: '本日のお茶',
-    desc: '日替わりのお茶、本日の茶葉はスタッフまでお尋ねください\n※こちらはストレートティーのみご提供しております',
+    desc: '日替わりのお茶、本日の茶葉はスタッフまでお尋ねください',
     price: 250,
     image: '/daily_special_tea.jpg',
     category: 'straight',
-    options: STRAIGHT_OPTIONS,
   },
   {
     id: 's2',
-    name: '緑茶ストレート',
-    desc: '清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。神奈川県丹沢の茶葉を使用。',
+    name: '緑茶',
+    desc: '清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。\n神奈川県丹沢の茶葉を使用。',
     price: 250,
     image: '/ryokucha_straight.jpg',
     category: 'straight',
-    options: STRAIGHT_OPTIONS,
   },
   {
     id: 's3',
-    name: 'ほうじ茶ストレート',
-    desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。滋賀県近江の茶葉を使用。',
-    price: 250,
-    image: '/hojicha_straight.jpg',
-    category: 'straight',
-    options: STRAIGHT_OPTIONS,
-  },
-  {
-    id: 's4',
-    name: '和青茶ストレート',
-    desc: '烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。純国産の茶葉を使用。',
-    price: 250,
-    image: '/wa_aocha_straight.jpg',
-    category: 'straight',
-    options: STRAIGHT_OPTIONS,
-  },
-  {
-    id: 's5',
-    name: '釜炒り緑茶ストレート',
-    desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。宮崎県五ヶ瀬の茶葉を使用。',
+    name: '釜炒り緑茶',
+    desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
     price: 250,
     image: '/kamairicha_straight.jpg',
     category: 'straight',
-    options: STRAIGHT_OPTIONS,
   },
-  // ミルクティー 3種
+  {
+    id: 's4',
+    name: '青茶',
+    desc: '烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。\n純国産の茶葉を使用。',
+    price: 250,
+    image: '/wa_aocha_straight.jpg',
+    category: 'straight',
+  },
+  {
+    id: 's5',
+    name: 'ほうじ茶',
+    desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。\n滋賀県近江の茶葉を使用。',
+    price: 250,
+    image: '/hojicha_straight.jpg',
+    category: 'straight',
+  },
+  // ミルクティー
   {
     id: 'm1',
     name: '緑茶ミルクティー',
-    desc: '緑茶のすっきりした渋みと、なめらかなミルクが溶け合う爽やかなミルクティー。神奈川県丹沢の茶葉を使用。',
+    desc: '緑茶のすっきりした渋みと、なめらかなミルクが溶け合う爽やかなミルクティー。\n神奈川県丹沢の茶葉を使用。',
     price: 400,
     image: '/ryokucha_milk.jpg',
     category: 'milk',
-    options: MILK_OPTIONS,
   },
   {
     id: 'm2',
-    name: 'ほうじ茶ミルクティー',
-    desc: '香ばしく煎り上げたほうじ茶の豊かな香りと、コクのあるミルクが絶妙に調和した人気の一杯。滋賀県近江の茶葉を使用。',
+    name: '釜炒り緑茶ミルクティー',
+    desc: '日本伝統の釜炒り製法による「釜香」の香ばしさと、ミルクのコクが引き立つ一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
     price: 400,
-    image: '/hojicha_milk.jpg',
+    image: '/ryokucha_milk.jpg',
     category: 'milk',
-    options: MILK_OPTIONS,
   },
   {
     id: 'm3',
-    name: '和青茶ミルクティー',
-    desc: '烏龍茶の華やかな香りとフレッシュミルクが出会う、個性的でリッチなミルクティー。純国産の茶葉を使用。',
+    name: '青茶ミルクティー',
+    desc: '烏龍茶の華やかな香りとフレッシュミルクが出会う、個性的でリッチなミルクティー。\n純国産の茶葉を使用。',
     price: 400,
     image: '/wa_aocha_milk.jpg',
     category: 'milk',
-    options: MILK_OPTIONS,
   },
-  // 炭酸（ソーダ） 3種　（一旦メニューから除外）
-  // {
-  //   id: 'c1',
-  //   name: '炭酸緑茶',
-  //   desc: '爽快な炭酸の泡が、緑茶特有の清涼感と爽やかな香りを引き立てるリフレッシュに最適な一杯。',
-  //   price: 350,
-  //   image: 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300',
-  //   category: 'soda',
-  //   options: SODA_OPTIONS,
-  // },
-  // {
-  //   id: 'c2',
-  //   name: '炭酸ほうじ茶',
-  //   desc: '香ばしいほうじ茶の風味と炭酸の刺激が出会った、新感覚ですっきりとした味わいの和風ソーダ。',
-  //   price: 350,
-  //   image: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=300',
-  //   category: 'soda',
-  //   options: SODA_OPTIONS,
-  // },
-  // {
-  //   id: 'c3',
-  //   name: '炭酸和青茶',
-  //   desc: '華やかな香りの国産烏龍茶に炭酸をプラス。フルーティーなアロマが炭酸とともに弾ける一杯。',
-  //   price: 350,
-  //   image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300',
-  //   category: 'soda',
-  //   options: SODA_OPTIONS,
-  // },
+  {
+    id: 'm4',
+    name: 'ほうじ茶ミルクティー',
+    desc: '香ばしく煎り上げたほうじ茶の豊かな香りと、コクのあるミルクが絶妙に調和した人気の一杯。\n滋賀県近江の茶葉を使用。',
+    price: 400,
+    image: '/hojicha_milk.jpg',
+    category: 'milk',
+  },
+  {
+    id: 'm5',
+    name: '金木犀青茶ミルクティー',
+    desc: '爽やかな金木犀の香りを纏わせた華やかでリッチなミルクティー。\n純国産青茶を使用。',
+    price: 400,
+    image: '/wa_aocha_milk.jpg',
+    category: 'milk',
+  },
+  {
+    id: 'm6',
+    name: '薔薇ほうじ茶ミルクティー',
+    desc: 'ローズの豊かな香りと香ばしさが絶妙に調和した上品なミルクティー。\n滋賀県近江ほうじ茶を使用。',
+    price: 400,
+    image: '/hojicha_milk.jpg',
+    category: 'milk',
+  },
 ];
 
 export default function Home() {
   const [profile, setProfile] = useState<LiffUserProfile | null>(null);
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
-  const [sweetness, setSweetness] = useState('ふつう');   // ミルクティー用
-  const [temperature, setTemperature] = useState('アイス'); // ストレートティー用
-  const [iceAmount, setIceAmount] = useState('ふつう');     // 氷の量
+  const [jelly, setJelly] = useState('なし');
+  const [sweetness, setSweetness] = useState('普通');
+  const [ice, setIce] = useState('氷あり');
   const [quantity, setQuantity] = useState(1);
-  const [size, setSize] = useState('M'); // M or L
-  const [jelly, setJelly] = useState('なし'); // なし, 緑茶ゼリー, ほうじ茶ゼリー, 青茶ゼリー, 釜炒り茶ゼリー
-  const [syrup, setSyrup] = useState('ノーマル'); // ノーマル, ローズ, 金木犀
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [showCartDetail, setShowCartDetail] = useState(false);
   const [orderCompleteNo, setOrderCompleteNo] = useState<string | null>(null);
@@ -156,18 +128,7 @@ export default function Home() {
   const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
 
   const getUnitPrice = (item: MenuItem) => {
-    let price = item.price;
-    if (size === 'L') {
-      if (item.category === 'milk') {
-        price += 50;
-      } else {
-        price += 30; // straight and soda
-      }
-    }
-    if (jelly !== 'なし') {
-      price += 30;
-    }
-    return price;
+    return item.price;
   };
 
   // Initialize LIFF
@@ -269,12 +230,9 @@ export default function Home() {
 
   const openOptionModal = (item: MenuItem) => {
     setSelectedItem(item);
-    setSweetness('ふつう');
-    setTemperature('アイス');
-    setIceAmount('ふつう');
-    setSize('M');
     setJelly('なし');
-    setSyrup('ノーマル');
+    setSweetness('普通');
+    setIce('氷あり');
     setQuantity(1);
   };
 
@@ -291,27 +249,11 @@ export default function Home() {
 
     const unitPrice = getUnitPrice(selectedItem);
 
-    // オプション情報の組み立て
-    let optionsList = [];
-    optionsList.push('サイズ: 450ml');
-
-    if (selectedItem.category === 'straight') {
-      optionsList.push(temperature === 'アイス' ? `温度: アイス (氷: ${iceAmount})` : `温度: ホット`);
-    } else if (selectedItem.category === 'soda') {
-      optionsList.push(`ソーダ (氷: ${iceAmount})`);
-    }
-
-    if (selectedItem.category === 'milk' || selectedItem.category === 'soda') {
-      optionsList.push(`甘さ: ${sweetness}`);
-    }
-
-    if (selectedItem.category === 'milk') {
-      optionsList.push(`シロップ: ${syrup}`);
-    }
-
-    if (jelly !== 'なし') {
-      optionsList.push(`トッピング: ${jelly}(+¥30)`);
-    }
+    const optionsList = [
+      `ゼリー: ${jelly}`,
+      `甘さ: ${sweetness}`,
+      `氷: ${ice}`,
+    ];
 
     const optionDesc = optionsList.join(', ');
 
@@ -549,159 +491,69 @@ export default function Home() {
               </button>
             </div>
 
-            {/* ストレートティー：温度選択 */}
-            {selectedItem.category === 'straight' && selectedItem.options.temperature && (
-              <div className={styles.optionSection}>
-                <span className={styles.optionTitle}>温度</span>
-                <div className={styles.optionsGrid}>
-                  {selectedItem.options.temperature.map((t) => (
-                    <React.Fragment key={t}>
-                      <input
-                        type="radio"
-                        id={`temp-${t}`}
-                        name="temperature"
-                        value={t}
-                        checked={temperature === t}
-                        onChange={() => setTemperature(t)}
-                        className={styles.optionChip}
-                      />
-                      <label htmlFor={`temp-${t}`} className={styles.optionLabel}>
-                        {t}
-                      </label>
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ストレートティー（アイス）、または炭酸：氷の量選択 */}
-            {((selectedItem.category === 'straight' && temperature === 'アイス') || selectedItem.category === 'soda') && (
-              <div className={styles.optionSection}>
-                <span className={styles.optionTitle}>氷の量</span>
-                <div className={styles.optionsGrid}>
-                  {['ふつう', '半分', 'なし'].map((amt) => (
-                    <React.Fragment key={`ice-${amt}`}>
-                      <input
-                        type="radio"
-                        id={`ice-${amt}`}
-                        name="iceAmount"
-                        value={amt}
-                        checked={iceAmount === amt}
-                        onChange={() => setIceAmount(amt)}
-                        className={styles.optionChip}
-                      />
-                      <label htmlFor={`ice-${amt}`} className={styles.optionLabel}>
-                        {amt}
-                      </label>
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ミルクティー、または炭酸：甘さ選択 */}
-            {(selectedItem.category === 'milk' || selectedItem.category === 'soda') && selectedItem.options.sweetness && (
-              <div className={styles.optionSection}>
-                <span className={styles.optionTitle}>甘さの調節</span>
-                <div className={styles.optionsGrid}>
-                  {selectedItem.options.sweetness.map((s) => (
-                    <React.Fragment key={s}>
-                      <input
-                        type="radio"
-                        id={`sweet-${s}`}
-                        name="sweetness"
-                        value={s}
-                        checked={sweetness === s}
-                        onChange={() => setSweetness(s)}
-                        className={styles.optionChip}
-                      />
-                      <label htmlFor={`sweet-${s}`} className={styles.optionLabel}>
-                        {s}
-                      </label>
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* サイズ選択 */}
-            {/* <div className={styles.optionSection}>
-              <span className={styles.optionTitle}>サイズ</span>
+            {/* 特製お茶ゼリー */}
+            <div className={styles.optionSection}>
+              <span className={styles.optionTitle}>特製お茶ゼリー</span>
               <div className={styles.optionsGrid}>
-                {[
-                  { value: 'M', label: 'M (400ml)' },
-                  { value: 'L', label: `L (500ml) (+¥${selectedItem.category === 'milk' ? 50 : 30})` },
-                ].map((sz) => (
-                  <React.Fragment key={sz.value}>
+                {['あり', 'なし'].map((jl) => (
+                  <React.Fragment key={jl}>
                     <input
                       type="radio"
-                      id={`size-${sz.value}`}
-                      name="size"
-                      value={sz.value}
-                      checked={size === sz.value}
-                      onChange={() => setSize(sz.value)}
+                      id={`jelly-${jl}`}
+                      name="jelly"
+                      value={jl}
+                      checked={jelly === jl}
+                      onChange={() => setJelly(jl)}
                       className={styles.optionChip}
                     />
-                    <label htmlFor={`size-${sz.value}`} className={styles.optionLabel}>
-                      {sz.label}
+                    <label htmlFor={`jelly-${jl}`} className={styles.optionLabel}>
+                      {jl}
                     </label>
                   </React.Fragment>
                 ))}
               </div>
-            </div> */}
+            </div>
 
-            {/* シロップ選択（ミルクティー限定） */}
-            {selectedItem.category === 'milk' && (
-              <div className={styles.optionSection}>
-                <span className={styles.optionTitle}>シロップ</span>
-                <div className={styles.optionsGrid}>
-                  {[
-                    { value: 'ノーマル', label: 'ノーマル' },
-                    { value: 'ローズ', label: 'ローズ' },
-                    { value: '金木犀', label: '金木犀' },
-                  ].map((srp) => (
-                    <React.Fragment key={srp.value}>
-                      <input
-                        type="radio"
-                        id={`syrup-${srp.value}`}
-                        name="syrup"
-                        value={srp.value}
-                        checked={syrup === srp.value}
-                        onChange={() => setSyrup(srp.value)}
-                        className={styles.optionChip}
-                      />
-                      <label htmlFor={`syrup-${srp.value}`} className={styles.optionLabel}>
-                        {srp.label}
-                      </label>
-                    </React.Fragment>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* トッピング追加 */}
+            {/* 甘さ */}
             <div className={styles.optionSection}>
-              <span className={styles.optionTitle}>トッピング追加</span>
+              <span className={styles.optionTitle}>甘さ</span>
               <div className={styles.optionsGrid}>
-                {[
-                  { value: 'なし', label: 'なし' },
-                  { value: '緑茶ゼリー', label: '緑茶ゼリー (+¥30)' },
-                  { value: 'ほうじ茶ゼリー', label: 'ほうじ茶ゼリー (+¥30)' },
-                  { value: '青茶ゼリー', label: '青茶ゼリー (+¥30)' },
-                  { value: '釜炒り茶ゼリー', label: '釜炒り茶ゼリー (+¥30)' },
-                ].map((jl) => (
-                  <React.Fragment key={jl.value}>
+                {['普通', '控えめ', 'なし'].map((s) => (
+                  <React.Fragment key={s}>
                     <input
                       type="radio"
-                      id={`jelly-${jl.value}`}
-                      name="jelly"
-                      value={jl.value}
-                      checked={jelly === jl.value}
-                      onChange={() => setJelly(jl.value)}
+                      id={`sweet-${s}`}
+                      name="sweetness"
+                      value={s}
+                      checked={sweetness === s}
+                      onChange={() => setSweetness(s)}
                       className={styles.optionChip}
                     />
-                    <label htmlFor={`jelly-${jl.value}`} className={styles.optionLabel}>
-                      {jl.label}
+                    <label htmlFor={`sweet-${s}`} className={styles.optionLabel}>
+                      {s}
+                    </label>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+
+            {/* 氷 */}
+            <div className={styles.optionSection}>
+              <span className={styles.optionTitle}>氷</span>
+              <div className={styles.optionsGrid}>
+                {['氷あり', '氷なし'].map((i) => (
+                  <React.Fragment key={i}>
+                    <input
+                      type="radio"
+                      id={`ice-${i}`}
+                      name="ice"
+                      value={i}
+                      checked={ice === i}
+                      onChange={() => setIce(i)}
+                      className={styles.optionChip}
+                    />
+                    <label htmlFor={`ice-${i}`} className={styles.optionLabel}>
+                      {i}
                     </label>
                   </React.Fragment>
                 ))}
