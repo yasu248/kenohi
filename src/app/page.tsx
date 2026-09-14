@@ -33,7 +33,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '緑茶',
     desc: '清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。\n神奈川県丹沢の茶葉を使用。',
     price: 250,
-    image: '/ryokucha_straight.jpg',
+    image: '/ryokucha_sq.jpg',
     category: 'straight',
   },
   {
@@ -41,7 +41,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '釜炒り緑茶',
     desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
     price: 250,
-    image: '/kamairicha_straight.jpg',
+    image: '/kamairicha_sq.jpg',
     category: 'straight',
   },
   {
@@ -49,7 +49,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '青茶',
     desc: '烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。\n純国産の茶葉を使用。',
     price: 250,
-    image: '/wa_aocha_straight.jpg',
+    image: '/aocha_sq.jpg',
     category: 'straight',
   },
   {
@@ -57,7 +57,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: 'ほうじ茶',
     desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。\n滋賀県近江の茶葉を使用。',
     price: 250,
-    image: '/hojicha_straight.jpg',
+    image: '/hojicha_sq.jpg',
     category: 'straight',
   },
   // ミルクティー
@@ -66,7 +66,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '緑茶ミルクティー',
     desc: '緑茶のすっきりした渋みと、なめらかなミルクが溶け合う爽やかなミルクティー。\n神奈川県丹沢の茶葉を使用。',
     price: 400,
-    image: '/ryokucha_milk.jpg',
+    image: '/ryokucha_milk_sq.jpg',
     category: 'milk',
   },
   {
@@ -74,7 +74,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '釜炒り緑茶ミルクティー',
     desc: '日本伝統の釜炒り製法による「釜香」の香ばしさと、ミルクのコクが引き立つ一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
     price: 400,
-    image: '/ryokucha_milk.jpg',
+    image: '/kamairicha_milk_sq.jpg',
     category: 'milk',
   },
   {
@@ -82,7 +82,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '青茶ミルクティー',
     desc: '烏龍茶の華やかな香りとフレッシュミルクが出会う、個性的でリッチなミルクティー。\n純国産の茶葉を使用。',
     price: 400,
-    image: '/wa_aocha_milk.jpg',
+    image: '/aocha_milk_sq.jpg',
     category: 'milk',
   },
   {
@@ -90,7 +90,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: 'ほうじ茶ミルクティー',
     desc: '香ばしく煎り上げたほうじ茶の豊かな香りと、コクのあるミルクが絶妙に調和した人気の一杯。\n滋賀県近江の茶葉を使用。',
     price: 400,
-    image: '/hojicha_milk.jpg',
+    image: '/hojicha_milk_sq.jpg',
     category: 'milk',
   },
   {
@@ -98,7 +98,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '金木犀青茶ミルクティー',
     desc: '爽やかな金木犀の香りを纏わせた華やかでリッチなミルクティー。\n純国産青茶を使用。',
     price: 400,
-    image: '/wa_aocha_milk.jpg',
+    image: '/aocha_milk_sq.jpg',
     category: 'milk',
   },
   {
@@ -106,7 +106,7 @@ const MENU_ITEMS: MenuItem[] = [
     name: '薔薇ほうじ茶ミルクティー',
     desc: 'ローズの豊かな香りと香ばしさが絶妙に調和した上品なミルクティー。\n滋賀県近江ほうじ茶を使用。',
     price: 400,
-    image: '/hojicha_milk.jpg',
+    image: '/hojicha_milk_sq.jpg',
     category: 'milk',
   },
 ];
