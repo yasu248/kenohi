@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ShoppingBag, X, Plus, Minus, Check, CreditCard, ChevronRight } from 'lucide-react';
+import { ShoppingBag, X, Plus, Minus, Check, CreditCard, ChevronRight, Clock } from 'lucide-react';
 import styles from './page.module.css';
 import { liffManager, LiffUserProfile } from '../lib/liffHelper';
 import type { OrderItem } from '../lib/store';
+import { isBusinessHours, isStoreCurrentlyOpen } from '../lib/businessHours';
 
 type MenuCategory = 'straight' | 'milk' | 'soda';
 
@@ -126,12 +127,19 @@ export default function Home() {
   const [myActiveOrderNo, setMyActiveOrderNo] = useState<string | null>(null);
   const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
   const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
+  const [isOpen, setIsOpen] = useState(true); // 初期状態をtrueにしておき、useEffectで判定
+  
+  // ページを開いた時点の時刻（日本時間）を保持
+  const [pageLoadJstDate] = useState<Date>(() => {
+    const str = new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+    return new Date(str);
+  });
 
   const getUnitPrice = (item: MenuItem) => {
     return item.price;
   };
 
-  // Initialize LIFF
+  // Initialize LIFF and check business hours
   useEffect(() => {
     async function init() {
       const ok = await liffManager.init();
@@ -146,11 +154,37 @@ export default function Home() {
     }
     init();
 
+    // 営業時間のチェック
+    const checkHours = async () => {
+      const isTimeValid = isBusinessHours();
+      if (!isTimeValid) {
+        setIsOpen(false);
+        return;
+      }
+
+      // 手動オープン状態をAPIから取得
+      try {
+        const res = await fetch('/api/store-state');
+        if (res.ok) {
+          const state = await res.json();
+          setIsOpen(isStoreCurrentlyOpen(state, pageLoadJstDate));
+        }
+      } catch (err) {
+        setIsOpen(false);
+      }
+    };
+    
+    checkHours();
+    // 1分ごとに営業時間チェックを更新
+    const timer = setInterval(checkHours, 60000);
+
     // 過去の自分の注文番号を復元
     const savedOrderNo = localStorage.getItem('kenohi_my_order_no');
     if (savedOrderNo) {
       setMyActiveOrderNo(savedOrderNo);
     }
+
+    return () => clearInterval(timer);
   }, []);
 
   // Stripe決済成功時のリダイレクト処理
@@ -229,6 +263,7 @@ export default function Home() {
   }, [myActiveOrderNo]);
 
   const openOptionModal = (item: MenuItem) => {
+    if (!isOpen) return; // 営業時間外はモーダルを開かない
     setSelectedItem(item);
     setJelly('なし');
     setSweetness('普通');
@@ -450,8 +485,22 @@ export default function Home() {
         </h1>
       </section>
 
+      {/* Closed Banner */}
+      {!isOpen && (
+        <div className={styles.closedBanner}>
+          <Clock size={20} className={styles.closedIcon} />
+          <div className={styles.closedText}>
+            <p className={styles.closedTitle}>現在は営業時間外です</p>
+            <p className={styles.closedDesc}>
+              営業時間：平日 10:00〜15:00<br/>
+              ※土日・祝日・指定の休業日はお休みです。
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Drink Menu */}
-      <section className={styles.menuList}>
+      <section className={styles.menuList} style={{ opacity: isOpen ? 1 : 0.6, pointerEvents: isOpen ? 'auto' : 'none' }}>
         {MENU_ITEMS.map((item) => (
           <div key={item.id} className={styles.menuItem} onClick={() => openOptionModal(item)}>
             <img src={item.image} alt={item.name} className={styles.menuItemImage} />

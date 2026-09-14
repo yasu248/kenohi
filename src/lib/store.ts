@@ -117,7 +117,6 @@ export async function updateOrderStatus(
   return toOrder(data);
 }
 
-/** 全注文を削除する（キッチン画面の「全注文クリア」） */
 export async function clearOrders(): Promise<void> {
   const { error } = await supabase
     .from('orders')
@@ -125,4 +124,49 @@ export async function clearOrders(): Promise<void> {
     .not('id', 'is', null); // 全行を対象
 
   if (error) throw new Error(`clearOrders: ${error.message}`);
+}
+
+// ─── 店舗状態管理 (ハック: ordersテーブルの特定レコードに状態を保存) ──────────
+
+const STORE_STATE_ID = 'STORE_STATE_001';
+
+export interface StoreState {
+  isManualOpen: boolean;
+  date: string;
+  openedAt?: number;
+}
+
+export async function getStoreState(): Promise<StoreState | null> {
+  const { data, error } = await supabase
+    .from('orders')
+    .select('customer_avatar')
+    .eq('id', STORE_STATE_ID)
+    .single();
+
+  if (error || !data || !data.customer_avatar) {
+    return null;
+  }
+  try {
+    return JSON.parse(data.customer_avatar);
+  } catch {
+    return null;
+  }
+}
+
+export async function setStoreState(state: StoreState): Promise<void> {
+  const row = {
+    id: STORE_STATE_ID,
+    items: [],
+    total_price: 0,
+    customer_name: 'STORE_STATE',
+    customer_avatar: JSON.stringify(state),
+    status: 'cancelled', // 通常の注文に混ざらないようにcancelledにする
+    order_number: '0000',
+  };
+
+  const { error } = await supabase
+    .from('orders')
+    .upsert(row);
+
+  if (error) throw new Error(`setStoreState: ${error.message}`);
 }

@@ -703,3 +703,39 @@
   color: var(--text-muted);
   font-size: 13px;
 }
+/* Closed Banner */
+.closedBanner {
+  background-color: #fee2e2;
+  border: 1px solid #f87171;
+  color: #b91c1c;
+  padding: 16px;
+  margin: 0 20px 20px 20px;
+  border-radius: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.closedIcon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.closedText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.closedTitle {
+  font-weight: 700;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.closedDesc {
+  font-size: 0.8rem;
+  margin: 0;
+  line-height: 1.4;
+  color: #991b1b;
+}
