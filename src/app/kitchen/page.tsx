@@ -118,7 +118,8 @@ export default function KitchenMonitor() {
     // 形式: QRKENOCHA-{orderId}-{itemIdx}-{cupIdx}
     const parts = scannedCode.split('-');
     if (parts.length < 4) return;
-    const orderId = parts[1];
+    // データベースのIDと完全一致させるため、小文字に戻しておく
+    const orderId = parts[1].toLowerCase();
     const cupId = `${parts[2]}-${parts[3]}`;
 
     // localStorageから既存のスキャン状況を取得
@@ -138,14 +139,15 @@ export default function KitchenMonitor() {
     localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
 
     // 現在の注文を取得（大文字小文字を区別せずに比較する）
-    const order = orders.find(o => o.id.toLowerCase() === orderId.toLowerCase());
+    const order = orders.find(o => o.id.toLowerCase() === orderId);
     if (!order) return;
     if (order.status !== 'preparing') return; // 調理中のものだけ対象
 
     const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
     // 全てのカップがスキャンされたか判定
     if (scannedCups[orderId].length >= totalCups) {
-      handleStatusChange(orderId, 'completed', false);
+      // order.id を渡す（DBの正確なIDで更新するため）
+      handleStatusChange(order.id, 'completed', false);
       delete scannedCups[orderId];
       localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
     }
