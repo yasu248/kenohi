@@ -100,7 +100,7 @@ export default function KitchenMonitor() {
 
       if (e.key === 'Enter') {
         const upperBuffer = buffer.toUpperCase();
-        if (upperBuffer.startsWith('QRKENOCHA_')) {
+        if (upperBuffer.startsWith('QRKENOCHA-')) {
           // 元の大文字小文字を保ったままではなく、システムに合わせて大文字にして処理する
           handleScan(upperBuffer);
         }
@@ -115,8 +115,8 @@ export default function KitchenMonitor() {
   }, [orders]); // ordersが更新されるたびに再バインド
 
   const handleScan = (scannedCode: string) => {
-    // 形式: QRKENOCHA_{orderId}_{itemIdx}_{cupIdx}
-    const parts = scannedCode.split('_');
+    // 形式: QRKENOCHA-{orderId}-{itemIdx}-{cupIdx}
+    const parts = scannedCode.split('-');
     if (parts.length < 4) return;
     const orderId = parts[1];
     const cupId = `${parts[2]}-${parts[3]}`;
@@ -162,14 +162,15 @@ export default function KitchenMonitor() {
         <meta charset="utf-8">
         <style>
           body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
-          /* 左に3mmの余白を入れて全体を右寄りに、align-itemsをflex-startにして文字が縦に伸びてもOKにする */
-          .label { width: 100%; padding: 5px 0 5px 3mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
+          /* 左寄せに戻し、QRコードだけを右端に押し付ける */
+          .label { width: 100%; padding: 5px 0; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
           .left-col { flex: 1; text-align: left; padding-right: 2mm; }
-          .right-col { width: 28mm; flex-shrink: 0; }
+          /* 右カラムの中身（QR画像）を限界まで右（マージン0）に寄せる */
+          .right-col { width: 28mm; flex-shrink: 0; display: flex; justify-content: flex-end; }
           .title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
           .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
           .options { font-size: 20px; font-weight: normal; margin-bottom: 0; line-height: 1.1; }
-          img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0; }
+          img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0 0 0 auto; }
         </style>
       </head>
       <body>
@@ -185,7 +186,9 @@ export default function KitchenMonitor() {
       const opts = nameParts.length > 1 ? '(' + nameParts[1] : '';
 
       for (let i = 0; i < item.quantity; i++) {
-        const qrData = `QRKENOCHA_${order.id}_${itemIndex}_${i}`;
+        // スキャナーが「_（アンダースコア）」を無視して結合してしまう事故を防ぐため、
+        // 単独キーで打てる「-（ハイフン）」を区切り文字に変更
+        const qrData = `QRKENOCHA-${order.id}-${itemIndex}-${i}`;
         try {
           // margin: 0 でQRコード内部の白いフチを消し、widthを大きくして画質を上げます
           const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 300 });
