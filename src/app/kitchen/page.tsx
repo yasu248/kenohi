@@ -54,9 +54,9 @@ export default function KitchenMonitor() {
     }
   }, []);
 
-  // セッションストレージから認証状態を復元
+  // ローカルストレージから認証状態を復元 (新しいタブ対策)
   useEffect(() => {
-    const auth = sessionStorage.getItem('kitchen_auth');
+    const auth = localStorage.getItem('kitchen_auth');
     if (auth === 'true') {
       setAuthed(true);
     }
@@ -73,7 +73,7 @@ export default function KitchenMonitor() {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordInput === KITCHEN_PASSWORD) {
-      sessionStorage.setItem('kitchen_auth', 'true');
+      localStorage.setItem('kitchen_auth', 'true');
       setAuthed(true);
       setPasswordError(false);
     } else {
@@ -159,12 +159,14 @@ export default function KitchenMonitor() {
       <head>
         <meta charset="utf-8">
         <style>
-          body { margin: 0; padding: 0; font-family: sans-serif; text-align: center; width: 100%; }
-          .label { width: 100%; padding: 10px 0; box-sizing: border-box; page-break-after: always; }
-          .title { font-size: 28px; font-weight: bold; margin-bottom: 8px; }
-          .subtitle { font-size: 22px; font-weight: bold; margin-bottom: 6px; }
-          .options { font-size: 16px; margin-bottom: 8px; }
-          img { width: 100%; max-width: 100%; height: auto; margin: 10px 0 0 0; display: block; }
+          body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
+          .label { width: 100%; padding: 5px 0; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: center; justify-content: space-between; }
+          .left-col { flex: 1; text-align: left; padding-left: 4px; }
+          .right-col { width: 30mm; flex-shrink: 0; }
+          .title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
+          .subtitle { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+          .options { font-size: 14px; margin-bottom: 0; }
+          img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0; }
         </style>
       </head>
       <body>
@@ -186,10 +188,14 @@ export default function KitchenMonitor() {
           const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 300 });
           htmlContent += `
             <div class="label">
-              <div class="title">#${order.orderNumber}</div>
-              <div class="subtitle">${baseName}</div>
-              <div class="options">${opts}</div>
-              <img src="${qrDataUrl}" />
+              <div class="left-col">
+                <div class="title">#${order.orderNumber}</div>
+                <div class="subtitle">${baseName}</div>
+                <div class="options">${opts}</div>
+              </div>
+              <div class="right-col">
+                <img src="${qrDataUrl}" />
+              </div>
             </div>
           `;
         } catch (err) {
@@ -203,9 +209,9 @@ export default function KitchenMonitor() {
 
     // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用, cut=partial でパーシャルカット)
     // PassPRNTは back パラメータが必須のため付与します。
-    // 新しいタブが開いた直後に自動で閉じるように ?close=true を付けます。
-    const baseUrl = window.location.href.split('?')[0];
-    const backUrl = encodeURIComponent(`${baseUrl}?close=true`);
+    // ※iOSの仕様上、どうしても新しいタブで開かれてしまいますが、
+    // localStorageのおかげでそのままキッチン画面が復元されます。
+    const backUrl = encodeURIComponent(window.location.href.split('?')[0]);
     const passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
 
     window.location.href = passprntUrl;
