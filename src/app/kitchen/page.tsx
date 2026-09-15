@@ -99,7 +99,7 @@ export default function KitchenMonitor() {
       lastKeyTime = now;
 
       if (e.key === 'Enter') {
-        if (buffer.startsWith('SILVERY_')) {
+        if (buffer.startsWith('QRKENOCHA_')) {
           handleScan(buffer);
         }
         buffer = '';
@@ -113,7 +113,7 @@ export default function KitchenMonitor() {
   }, [orders]); // ordersが更新されるたびに再バインド
 
   const handleScan = (scannedCode: string) => {
-    // 形式: SILVERY_{orderId}_{itemIdx}_{cupIdx}
+    // 形式: QRKENOCHA_{orderId}_{itemIdx}_{cupIdx}
     const parts = scannedCode.split('_');
     if (parts.length < 4) return;
     const orderId = parts[1];
@@ -127,10 +127,13 @@ export default function KitchenMonitor() {
       scannedCups[orderId] = [];
     }
     
-    if (!scannedCups[orderId].includes(cupId)) {
-      scannedCups[orderId].push(cupId);
-      localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
+    if (scannedCups[orderId].includes(cupId)) {
+      alert('このラベルはすでにスキャン済みです！');
+      return; // スキャンを無視して終了
     }
+
+    scannedCups[orderId].push(cupId);
+    localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
 
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
@@ -156,12 +159,12 @@ export default function KitchenMonitor() {
       <head>
         <meta charset="utf-8">
         <style>
-          body { margin: 0; padding: 0; font-family: sans-serif; text-align: center; }
-          .label { width: 58mm; padding: 2mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-          .title { font-size: 14px; font-weight: bold; margin-bottom: 2px; }
-          .subtitle { font-size: 10px; margin-bottom: 4px; }
-          .options { font-size: 9px; margin-bottom: 4px; }
-          img { width: 100%; max-width: 35mm; height: auto; margin: 4px 0; }
+          body { margin: 0; padding: 0; font-family: sans-serif; text-align: center; width: 100%; }
+          .label { width: 100%; padding: 10px 5px; box-sizing: border-box; page-break-after: always; }
+          .title { font-size: 28px; font-weight: bold; margin-bottom: 8px; }
+          .subtitle { font-size: 22px; font-weight: bold; margin-bottom: 6px; }
+          .options { font-size: 16px; margin-bottom: 8px; }
+          img { width: 85%; max-width: 50mm; height: auto; margin: 8px auto; display: block; }
         </style>
       </head>
       <body>
@@ -177,7 +180,7 @@ export default function KitchenMonitor() {
       const opts = nameParts.length > 1 ? '(' + nameParts[1] : '';
 
       for (let i = 0; i < item.quantity; i++) {
-        const qrData = `${order.id}_${itemIndex}_${i}`;
+        const qrData = `QRKENOCHA_${order.id}_${itemIndex}_${i}`;
         try {
           const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 1, width: 120 });
           htmlContent += `
@@ -198,8 +201,9 @@ export default function KitchenMonitor() {
     htmlContent += `</body></html>`;
 
     // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用)
-    const backUrl = encodeURIComponent(window.location.href);
-    const passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2`;
+    // 毎回新しいタブが開くのを防ぐため、backパラメータは設定しません。
+    // 代わりに画面左上の「◀︎ Safari」ボタンで戻っていただきます。
+    const passprntUrl = `starpassprnt://v1/print/nopreview?html=${encodeURIComponent(htmlContent)}&size=2`;
     
     window.location.href = passprntUrl;
   };
