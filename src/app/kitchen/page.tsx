@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
+import QRCode from 'react-qr-code';
 import { isStoreCurrentlyOpen } from '../../lib/businessHours';
 
 // キッチン画面へのアクセスパスワード
@@ -15,6 +16,7 @@ export default function KitchenMonitor() {
   const [authed, setAuthed] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
+  const [orderToPrint, setOrderToPrint] = useState<Order | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string } | null>(null);
@@ -81,7 +83,99 @@ export default function KitchenMonitor() {
     }
   };
 
-  const handleStatusChange = async (orderId: string, nextStatus: Order['status']) => {
+  // ─── スキャナー用キーストローク監視 ───
+  useEffect(() => {
+    let buffer = '';
+    let lastKeyTime = 0;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // フォーム入力中の場合は無視
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      const now = Date.now();
+      // 入力間隔が50ms以上空いた場合は手入力とみなしてバッファをクリア（スキャナーは一瞬で入力される）
+      if (now - lastKeyTime > 50) {
+        buffer = '';
+      }
+      lastKeyTime = now;
+
+      if (e.key === 'Enter') {
+        if (buffer.startsWith('SILVERY_')) {
+          handleScan(buffer);
+        }
+        buffer = '';
+      } else {
+        buffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [orders]); // ordersが更新されるたびに再バインド
+
+  const handleScan = (scannedCode: string) => {
+    // 形式: SILVERY_{orderId}_{itemIdx}_{cupIdx}
+    const parts = scannedCode.split('_');
+    if (parts.length < 4) return;
+    const orderId = parts[1];
+    const cupId = `${parts[2]}-${parts[3]}`;
+
+    // localStorageから既存のスキャン状況を取得
+    const scannedCupsRaw = localStorage.getItem('scannedCups');
+    const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
+    
+    if (!scannedCups[orderId]) {
+      scannedCups[orderId] = [];
+    }
+    
+    if (!scannedCups[orderId].includes(cupId)) {
+      scannedCups[orderId].push(cupId);
+      localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
+    }
+
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
+    if (order.status !== 'preparing') return; // 調理中のものだけ対象
+
+    const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+    // 全てのカップがスキャンされたか判定
+    if (scannedCups[orderId].length >= totalCups) {
+      handleStatusChange(orderId, 'completed', false);
+      delete scannedCups[orderId];
+      localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
+    }
+  };
+
+  const handleStartPreparing = (order: Order) => {
+    setOrderToPrint(order);
+    setTimeout(() => {
+      window.print();
+    }, 300);
+    // 即座にステータスを変更
+    handleStatusChange(order.id, 'preparing', false);
+  };
+
+  const handleStatusChange = async (orderId: string, nextStatus: Order['status'], isManual = true) => {
+    // 調理中から新規注文に戻す場合の確認
+    if (nextStatus === 'pending' && isManual) {
+      if (!confirm('この注文を「新規注文」に戻しますか？（印刷したラベルは破棄してください）')) return;
+    }
+
+    // 手動で受け渡し可能（completed）にする場合、未スキャンがないか確認
+    if (nextStatus === 'completed' && isManual) {
+      const order = orders.find(o => o.id === orderId);
+      if (order && order.status === 'preparing') {
+        const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+        const scannedCupsRaw = localStorage.getItem('scannedCups');
+        const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
+        const scannedCount = (scannedCups[orderId] || []).length;
+        
+        if (scannedCount < totalCups) {
+          if (!confirm('QRコードを読み込まずに手動で変更していますがよろしいですか？')) return;
+        }
+      }
+    }
+
     try {
       const res = await fetch(`/api/orders/${orderId}`, {
         method: 'PATCH',
@@ -203,6 +297,32 @@ export default function KitchenMonitor() {
 
   return (
     <main className={styles.kitchenContainer}>
+      
+      {/* ─── 印刷用隠し領域 ─── */}
+      <div className={styles.printArea}>
+        {orderToPrint && orderToPrint.items.map((item, itemIdx) => (
+          Array.from({ length: item.quantity }).map((_, cupIdx) => (
+            <div key={`${itemIdx}-${cupIdx}`} className={styles.labelPage}>
+              <div className={styles.labelTitle}>
+                {item.name.split(' (')[0]}
+              </div>
+              <div className={styles.labelSubtitle}>
+                注文: #{orderToPrint.orderNumber}
+              </div>
+              <div className={styles.labelOptions}>
+                {item.name.includes('(') ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1) : 'オプションなし'}
+              </div>
+              <div className={styles.qrContainer}>
+                <QRCode 
+                  value={`SILVERY_${orderToPrint.id}_${itemIdx}_${cupIdx}`}
+                  size={60}
+                />
+              </div>
+            </div>
+          ))
+        ))}
+      </div>
+
       {/* Kitchen Header */}
       <header className={styles.kitchenHeader}>
         <div>
@@ -363,7 +483,7 @@ export default function KitchenMonitor() {
                   <div className={styles.cardActions}>
                     <button
                       className={styles.btnPrimary}
-                      onClick={() => handleStatusChange(order.id, 'preparing')}
+                      onClick={() => handleStartPreparing(order)}
                     >
                       <Play size={14} />
                       調理を開始する
@@ -393,9 +513,32 @@ export default function KitchenMonitor() {
             ) : (
               preparingOrders.map((order) => (
                 <div key={order.id} className={`${styles.orderCard} ${styles.preparingCard}`}>
-                  <div className={styles.cardHeader}>
+                  <div className={styles.cardHeader} style={{ position: 'relative', paddingRight: '60px' }}>
                     <span className={styles.orderNo}>#{order.orderNumber}</span>
                     <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
+                    <button
+                      onClick={() => handleStatusChange(order.id, 'pending')}
+                      style={{
+                        position: 'absolute',
+                        top: '-4px',
+                        right: '-4px',
+                        background: 'none',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '4px',
+                        color: '#64748b',
+                        cursor: 'pointer',
+                        padding: '4px 6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: '0.7rem',
+                        gap: '2px',
+                        backgroundColor: '#f8fafc'
+                      }}
+                      title="新規注文に戻す"
+                    >
+                      <ArrowLeft size={10} />
+                      戻す
+                    </button>
                   </div>
 
                   <div className={styles.customerInfo}>

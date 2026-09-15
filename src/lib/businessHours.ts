@@ -30,13 +30,8 @@ export function isBusinessHours(date: Date = new Date()): boolean {
     return false;
   }
 
-  // 3. 15:00になった瞬間に終了と判定（開始は手動）
-  // 過去の互換性のために残していますが、基本は isStoreCurrentlyOpen を使います
-  if (hours < 15) {
-    return true;
-  }
-
-  return false;
+  // 時間の判定は isStoreCurrentlyOpen に完全に委譲するため、ここでは営業日（平日）であれば true を返すように変更
+  return true;
 }
 
 export function isStoreCurrentlyOpen(
