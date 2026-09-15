@@ -122,11 +122,11 @@ export default function KitchenMonitor() {
     // localStorageから既存のスキャン状況を取得
     const scannedCupsRaw = localStorage.getItem('scannedCups');
     const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
-    
+
     if (!scannedCups[orderId]) {
       scannedCups[orderId] = [];
     }
-    
+
     if (scannedCups[orderId].includes(cupId)) {
       alert('このラベルはすでにスキャン済みです！');
       return; // スキャンを無視して終了
@@ -160,11 +160,11 @@ export default function KitchenMonitor() {
         <meta charset="utf-8">
         <style>
           body { margin: 0; padding: 0; font-family: sans-serif; text-align: center; width: 100%; }
-          .label { width: 100%; padding: 10px 5px; box-sizing: border-box; page-break-after: always; }
+          .label { width: 100%; padding: 10px 0; box-sizing: border-box; page-break-after: always; }
           .title { font-size: 28px; font-weight: bold; margin-bottom: 8px; }
           .subtitle { font-size: 22px; font-weight: bold; margin-bottom: 6px; }
           .options { font-size: 16px; margin-bottom: 8px; }
-          img { width: 85%; max-width: 50mm; height: auto; margin: 8px auto; display: block; }
+          img { width: 100%; max-width: 100%; height: auto; margin: 10px 0 0 0; display: block; }
         </style>
       </head>
       <body>
@@ -182,7 +182,8 @@ export default function KitchenMonitor() {
       for (let i = 0; i < item.quantity; i++) {
         const qrData = `QRKENOCHA_${order.id}_${itemIndex}_${i}`;
         try {
-          const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 1, width: 120 });
+          // margin: 0 でQRコード内部の白いフチを消し、widthを大きくして画質を上げます
+          const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 300 });
           htmlContent += `
             <div class="label">
               <div class="title">#${order.orderNumber}</div>
@@ -197,14 +198,16 @@ export default function KitchenMonitor() {
         currentCup++;
       }
     }
-    
+
     htmlContent += `</body></html>`;
 
-    // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用)
-    // 毎回新しいタブが開くのを防ぐため、backパラメータは設定しません。
-    // 代わりに画面左上の「◀︎ Safari」ボタンで戻っていただきます。
-    const passprntUrl = `starpassprnt://v1/print/nopreview?html=${encodeURIComponent(htmlContent)}&size=2`;
-    
+    // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用, cut=partial でパーシャルカット)
+    // PassPRNTは back パラメータが必須のため付与します。
+    // 新しいタブが開いた直後に自動で閉じるように ?close=true を付けます。
+    const baseUrl = window.location.href.split('?')[0];
+    const backUrl = encodeURIComponent(`${baseUrl}?close=true`);
+    const passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
+
     window.location.href = passprntUrl;
   };
 
@@ -222,7 +225,7 @@ export default function KitchenMonitor() {
         const scannedCupsRaw = localStorage.getItem('scannedCups');
         const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
         const scannedCount = (scannedCups[orderId] || []).length;
-        
+
         if (scannedCount < totalCups) {
           if (!confirm('QRコードを読み込まずに手動で変更していますがよろしいですか？')) return;
         }
