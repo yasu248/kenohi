@@ -137,7 +137,8 @@ export default function KitchenMonitor() {
     scannedCups[orderId].push(cupId);
     localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
 
-    const order = orders.find(o => o.id === orderId);
+    // 現在の注文を取得（大文字小文字を区別せずに比較する）
+    const order = orders.find(o => o.id.toLowerCase() === orderId.toLowerCase());
     if (!order) return;
     if (order.status !== 'preparing') return; // 調理中のものだけ対象
 
@@ -162,10 +163,10 @@ export default function KitchenMonitor() {
         <meta charset="utf-8">
         <style>
           body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
-          /* 左寄せに戻し、QRコードだけを右端に押し付ける */
-          .label { width: 100%; padding: 5px 0; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
+          /* 左右に4mmずつの余白を設定 */
+          .label { width: 100%; padding: 5px 4mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
           .left-col { flex: 1; text-align: left; padding-right: 2mm; }
-          /* 右カラムの中身（QR画像）を限界まで右（マージン0）に寄せる */
+          /* 右カラムの中身（QR画像）を限界まで右に寄せる */
           .right-col { width: 28mm; flex-shrink: 0; display: flex; justify-content: flex-end; }
           .title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
           .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
