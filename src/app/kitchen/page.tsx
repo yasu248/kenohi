@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
-import QRCode from 'react-qr-code';
+import QRCode from 'qrcode';
 import { isStoreCurrentlyOpen } from '../../lib/businessHours';
 
 // キッチン画面へのアクセスパスワード
@@ -16,7 +16,6 @@ export default function KitchenMonitor() {
   const [authed, setAuthed] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
-  const [orderToPrint, setOrderToPrint] = useState<Order | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string } | null>(null);
@@ -146,13 +145,63 @@ export default function KitchenMonitor() {
     }
   };
 
-  const handleStartPreparing = (order: Order) => {
-    setOrderToPrint(order);
-    setTimeout(() => {
-      window.print();
-    }, 300);
-    // 即座にステータスを変更
+  const handleStartPreparing = async (order: Order) => {
+    // 1. 即座にステータスを変更
     handleStatusChange(order.id, 'preparing', false);
+
+    // 2. PassPRNT用のHTML組み立て
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { margin: 0; padding: 0; font-family: sans-serif; text-align: center; }
+          .label { width: 58mm; padding: 2mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+          .title { font-size: 14px; font-weight: bold; margin-bottom: 2px; }
+          .subtitle { font-size: 10px; margin-bottom: 4px; }
+          .options { font-size: 9px; margin-bottom: 4px; }
+          img { width: 100%; max-width: 35mm; height: auto; margin: 4px 0; }
+        </style>
+      </head>
+      <body>
+    `;
+
+    const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+    let currentCup = 1;
+
+    for (const item of order.items) {
+      const itemIndex = order.items.indexOf(item);
+      const nameParts = item.name.split(' (');
+      const baseName = nameParts[0];
+      const opts = nameParts.length > 1 ? '(' + nameParts[1] : '';
+
+      for (let i = 0; i < item.quantity; i++) {
+        const qrData = `${order.id}_${itemIndex}_${i}`;
+        try {
+          const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 1, width: 120 });
+          htmlContent += `
+            <div class="label">
+              <div class="title">#${order.orderNumber}</div>
+              <div class="subtitle">${baseName}</div>
+              <div class="options">${opts}</div>
+              <img src="${qrDataUrl}" />
+            </div>
+          `;
+        } catch (err) {
+          console.error("QR Code generation failed", err);
+        }
+        currentCup++;
+      }
+    }
+    
+    htmlContent += `</body></html>`;
+
+    // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用)
+    const backUrl = encodeURIComponent(window.location.href);
+    const passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2`;
+    
+    window.location.href = passprntUrl;
   };
 
   const handleStatusChange = async (orderId: string, nextStatus: Order['status'], isManual = true) => {
@@ -297,31 +346,7 @@ export default function KitchenMonitor() {
 
   return (
     <main className={styles.kitchenContainer}>
-      
-      {/* ─── 印刷用隠し領域 ─── */}
-      <div className={styles.printArea}>
-        {orderToPrint && orderToPrint.items.map((item, itemIdx) => (
-          Array.from({ length: item.quantity }).map((_, cupIdx) => (
-            <div key={`${itemIdx}-${cupIdx}`} className={styles.labelPage}>
-              <div className={styles.labelTitle}>
-                {item.name.split(' (')[0]}
-              </div>
-              <div className={styles.labelSubtitle}>
-                注文: #{orderToPrint.orderNumber}
-              </div>
-              <div className={styles.labelOptions}>
-                {item.name.includes('(') ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1) : 'オプションなし'}
-              </div>
-              <div className={styles.qrContainer}>
-                <QRCode 
-                  value={`SILVERY_${orderToPrint.id}_${itemIdx}_${cupIdx}`}
-                  size={60}
-                />
-              </div>
-            </div>
-          ))
-        ))}
-      </div>
+
 
       {/* Kitchen Header */}
       <header className={styles.kitchenHeader}>
