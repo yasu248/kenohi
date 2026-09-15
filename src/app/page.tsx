@@ -97,7 +97,7 @@ const MENU_ITEMS: MenuItem[] = [
   {
     id: 'm5',
     name: '金木犀青茶ミルクティー',
-    desc: '爽やかな金木犀の香りを纏わせた華やかでリッチなミルクティー。\n純国産青茶を使用。',
+    desc: '爽やかな金木犀の香りを纏わせた華やかでリッチなミルクティー。\n※甘さなしにできません',
     price: 400,
     image: '/aocha_milk_sq.jpg',
     category: 'milk',
@@ -105,7 +105,7 @@ const MENU_ITEMS: MenuItem[] = [
   {
     id: 'm6',
     name: '薔薇ほうじ茶ミルクティー',
-    desc: 'ローズの豊かな香りと香ばしさが絶妙に調和した上品なミルクティー。\n滋賀県近江ほうじ茶を使用。',
+    desc: 'ローズの豊かな香りと香ばしさが絶妙に調和した上品なミルクティー。\n※甘さなしにできません',
     price: 400,
     image: '/hojicha_milk_sq.jpg',
     category: 'milk',
@@ -128,7 +128,7 @@ export default function Home() {
   const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
   const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
   const [isOpen, setIsOpen] = useState(true); // 初期状態をtrueにしておき、useEffectで判定
-  
+
   // ページを開いた時点の時刻（日本時間）を保持
   const [pageLoadJstDate] = useState<Date>(() => {
     const str = new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
@@ -173,7 +173,7 @@ export default function Home() {
         setIsOpen(false);
       }
     };
-    
+
     checkHours();
     // 1分ごとに営業時間チェックを更新
     const timer = setInterval(checkHours, 60000);
@@ -492,7 +492,7 @@ export default function Home() {
           <div className={styles.closedText}>
             <p className={styles.closedTitle}>現在は営業時間外です</p>
             <p className={styles.closedDesc}>
-              営業時間：平日 10:00〜15:00<br/>
+              営業時間：平日 10:00〜15:00<br />
               ※土日・祝日・指定の休業日はお休みです。
             </p>
           </div>
@@ -567,22 +567,29 @@ export default function Home() {
             <div className={styles.optionSection}>
               <span className={styles.optionTitle}>甘さ</span>
               <div className={styles.optionsGrid}>
-                {['普通', '控えめ', 'なし'].map((s) => (
-                  <React.Fragment key={s}>
-                    <input
-                      type="radio"
-                      id={`sweet-${s}`}
-                      name="sweetness"
-                      value={s}
-                      checked={sweetness === s}
-                      onChange={() => setSweetness(s)}
-                      className={styles.optionChip}
-                    />
-                    <label htmlFor={`sweet-${s}`} className={styles.optionLabel}>
-                      {s}
-                    </label>
-                  </React.Fragment>
-                ))}
+                {['普通', '控えめ', 'なし'].map((s) => {
+                  const isDisabled = s === 'なし' && (selectedItem.id === 'm5' || selectedItem.id === 'm6');
+                  return (
+                    <React.Fragment key={s}>
+                      <input
+                        type="radio"
+                        id={`sweet-${s}`}
+                        name="sweetness"
+                        value={s}
+                        checked={sweetness === s}
+                        onChange={() => setSweetness(s)}
+                        disabled={isDisabled}
+                        className={styles.optionChip}
+                      />
+                      <label 
+                        htmlFor={`sweet-${s}`} 
+                        className={`${styles.optionLabel} ${isDisabled ? styles.disabledOptionLabel : ''}`}
+                      >
+                        {s}
+                      </label>
+                    </React.Fragment>
+                  );
+                })}
               </div>
             </div>
 

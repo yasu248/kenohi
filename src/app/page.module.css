@@ -265,6 +265,14 @@
   background-color: var(--card-bg);
 }
 
+.disabledOptionLabel {
+  background-color: #f3f4f6;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .optionChip:checked+.optionLabel {
   background-color: var(--primary-green);
   color: white;
