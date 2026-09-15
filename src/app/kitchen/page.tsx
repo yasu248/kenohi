@@ -92,15 +92,17 @@ export default function KitchenMonitor() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       const now = Date.now();
-      // 入力間隔が50ms以上空いた場合は手入力とみなしてバッファをクリア（スキャナーは一瞬で入力される）
-      if (now - lastKeyTime > 50) {
+      // 入力間隔が200ms以上空いた場合は手入力とみなしてバッファをクリア
+      if (now - lastKeyTime > 200) {
         buffer = '';
       }
       lastKeyTime = now;
 
       if (e.key === 'Enter') {
-        if (buffer.startsWith('QRKENOCHA_')) {
-          handleScan(buffer);
+        const upperBuffer = buffer.toUpperCase();
+        if (upperBuffer.startsWith('QRKENOCHA_')) {
+          // 元の大文字小文字を保ったままではなく、システムに合わせて大文字にして処理する
+          handleScan(upperBuffer);
         }
         buffer = '';
       } else {
@@ -160,12 +162,13 @@ export default function KitchenMonitor() {
         <meta charset="utf-8">
         <style>
           body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
-          .label { width: 100%; padding: 5px 0; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: center; justify-content: space-between; }
-          .left-col { flex: 1; text-align: left; padding-left: 4px; }
-          .right-col { width: 30mm; flex-shrink: 0; }
+          /* 左に3mmの余白を入れて全体を右寄りに、align-itemsをflex-startにして文字が縦に伸びてもOKにする */
+          .label { width: 100%; padding: 5px 0 5px 3mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
+          .left-col { flex: 1; text-align: left; padding-right: 2mm; }
+          .right-col { width: 28mm; flex-shrink: 0; }
           .title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
-          .subtitle { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
-          .options { font-size: 14px; margin-bottom: 0; }
+          .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
+          .options { font-size: 20px; font-weight: normal; margin-bottom: 0; line-height: 1.1; }
           img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0; }
         </style>
       </head>
