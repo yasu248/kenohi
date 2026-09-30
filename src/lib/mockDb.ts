@@ -19,9 +19,20 @@ export interface Order {
 
 const STORAGE_KEY = 'milktea_orders_mock';
 
-// Generate a random 4-digit order number
+// Generate sequential order number (first order of the day starts random 3000-5000, then increments)
 function generateOrderNumber(): string {
-  return Math.floor(1000 + Math.random() * 9000).toString();
+  const orders = getOrders();
+  let maxNum = 0;
+  for (const o of orders) {
+    const num = parseInt(o.orderNumber, 10);
+    if (!isNaN(num) && num >= 3000 && num > maxNum) {
+      maxNum = num;
+    }
+  }
+  if (maxNum === 0) {
+    return (Math.floor(Math.random() * 2001) + 3000).toString();
+  }
+  return (maxNum + 1).toString();
 }
 
 // Get all orders from localStorage

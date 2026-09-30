@@ -26,6 +26,9 @@ export async function PATCH(req: NextRequest) {
       date: current?.date ?? '',
       openedAt: current?.openedAt,
       soldOutItems,
+      openHistory: current?.openHistory ?? [],
+      currentOrderDate: current?.currentOrderDate,
+      lastOrderNumber: current?.lastOrderNumber,
     });
 
     return NextResponse.json({ success: true, soldOutItems });

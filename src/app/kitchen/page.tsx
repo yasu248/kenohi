@@ -473,9 +473,9 @@ export default function KitchenMonitor() {
               </button>
             );
           })()}
-          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="商品管理（欠品設定）">
+          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="欠品管理">
             <PackageX size={16} />
-            商品管理
+            欠品管理
           </button>
           <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
             <BarChart size={16} />
@@ -550,17 +550,6 @@ export default function KitchenMonitor() {
                   <div className={styles.cardHeader}>
                     <span className={styles.orderNo}>#{order.orderNumber}</span>
                     <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
-                  </div>
-
-                  <div className={styles.customerInfo}>
-                    {order.customerAvatar && (
-                      <img
-                        src={order.customerAvatar}
-                        alt={order.customerName}
-                        className={styles.avatar}
-                      />
-                    )}
-                    <span className={styles.customerName}>{order.customerName}</span>
                   </div>
 
                   <div className={styles.itemDetails}>
@@ -640,17 +629,6 @@ export default function KitchenMonitor() {
                     </button>
                   </div>
 
-                  <div className={styles.customerInfo}>
-                    {order.customerAvatar && (
-                      <img
-                        src={order.customerAvatar}
-                        alt={order.customerName}
-                        className={styles.avatar}
-                      />
-                    )}
-                    <span className={styles.customerName}>{order.customerName}</span>
-                  </div>
-
                   <div className={styles.itemDetails}>
                     {order.items.map((item, idx) => (
                       <div key={idx} className={styles.drinkItem}>
@@ -704,17 +682,6 @@ export default function KitchenMonitor() {
                   <div className={styles.cardHeader}>
                     <span className={styles.orderNo}>#{order.orderNumber}</span>
                     <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
-                  </div>
-
-                  <div className={styles.customerInfo}>
-                    {order.customerAvatar && (
-                      <img
-                        src={order.customerAvatar}
-                        alt={order.customerName}
-                        className={styles.avatar}
-                      />
-                    )}
-                    <span className={styles.customerName}>{order.customerName}</span>
                   </div>
 
                   <div className={styles.itemDetails}>

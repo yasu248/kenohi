@@ -47,8 +47,80 @@ function toOrder(row: any): Order {
   };
 }
 
-function generateOrderNumber(): string {
-  return Math.floor(1000 + Math.random() * 9000).toString();
+function getJSTDateString(date: Date = new Date()): string {
+  const jstString = date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+  const jstDate = new Date(jstString);
+  const year = jstDate.getFullYear();
+  const month = String(jstDate.getMonth() + 1).padStart(2, '0');
+  const day = String(jstDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getRandomStartOrderNumber(): number {
+  const min = 3000;
+  const max = 5000;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function generateNextOrderNumber(): Promise<string> {
+  const todayStr = getJSTDateString();
+  const startOfDay = new Date(`${todayStr}T00:00:00+09:00`).toISOString();
+  const endOfDay = new Date(`${todayStr}T23:59:59.999+09:00`).toISOString();
+
+  // 1. 店舗の最新保存状態を取得
+  const state = await getStoreState();
+
+  // 2. 本日の既存注文を取得
+  const { data: todayOrders } = await supabase
+    .from('orders')
+    .select('order_number, created_at')
+    .neq('id', STORE_STATE_ID)
+    .gte('created_at', startOfDay)
+    .lte('created_at', endOfDay)
+    .order('created_at', { ascending: false });
+
+  let nextOrderNumber: number;
+
+  // 本日すでに注文が発行されている場合は前回の番号から+1（昇順）
+  if (
+    state &&
+    state.currentOrderDate === todayStr &&
+    typeof state.lastOrderNumber === 'number' &&
+    state.lastOrderNumber >= 3000
+  ) {
+    let maxNum = state.lastOrderNumber;
+    if (todayOrders && todayOrders.length > 0) {
+      for (const order of todayOrders) {
+        const num = parseInt(order.order_number, 10);
+        if (!isNaN(num) && num >= maxNum && num <= maxNum + 20) {
+          maxNum = Math.max(maxNum, num);
+        }
+      }
+    }
+    nextOrderNumber = maxNum + 1;
+  } else {
+    // その日の最初の注文番号: 3000〜5000 のランダムな整数
+    nextOrderNumber = getRandomStartOrderNumber();
+  }
+
+  // StoreState を更新して次回以降に備える
+  const updatedState: StoreState = {
+    isManualOpen: state?.isManualOpen ?? false,
+    date: state?.date ?? todayStr,
+    openedAt: state?.openedAt,
+    soldOutItems: state?.soldOutItems ?? [],
+    openHistory: state?.openHistory ?? [],
+    currentOrderDate: todayStr,
+    lastOrderNumber: nextOrderNumber,
+  };
+
+  try {
+    await setStoreState(updatedState);
+  } catch (err) {
+    console.error('Failed to update StoreState with new order number:', err);
+  }
+
+  return nextOrderNumber.toString();
 }
 
 // ─── 公開関数 ────────────────────────────────────────────────────────────────
@@ -77,6 +149,8 @@ export async function addOrder(
     0
   );
 
+  const orderNumber = await generateNextOrderNumber();
+
   const row = {
     id: Math.random().toString(36).substring(2, 11),
     items,
@@ -84,7 +158,7 @@ export async function addOrder(
     customer_name: customerName,
     customer_avatar: customerAvatar ?? null,
     status: 'unpaid',
-    order_number: generateOrderNumber(),
+    order_number: orderNumber,
   };
 
   const { data, error } = await supabase
@@ -121,9 +195,16 @@ export async function clearOrders(): Promise<void> {
   const { error } = await supabase
     .from('orders')
     .delete()
-    .not('id', 'is', null); // 全行を対象
+    .neq('id', STORE_STATE_ID); // STORE_STATE_001 を保持
 
   if (error) throw new Error(`clearOrders: ${error.message}`);
+
+  const state = await getStoreState();
+  if (state) {
+    delete state.lastOrderNumber;
+    delete state.currentOrderDate;
+    await setStoreState(state);
+  }
 }
 
 // ─── 店舗状態管理 (ハック: ordersテーブルの特定レコードに状態を保存) ──────────
@@ -140,6 +221,8 @@ export interface StoreState {
     openedAt: number;   // Unix ms
     soldOutItems?: string[];
   }>;
+  currentOrderDate?: string;
+  lastOrderNumber?: number;
 }
 
 export async function getStoreState(): Promise<StoreState | null> {

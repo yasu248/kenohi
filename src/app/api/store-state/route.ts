@@ -39,6 +39,8 @@ export async function POST(req: NextRequest) {
       openedAt: body.openedAt ?? current?.openedAt,
       soldOutItems: body.soldOutItems ?? current?.soldOutItems ?? [],
       openHistory,
+      currentOrderDate: current?.currentOrderDate,
+      lastOrderNumber: current?.lastOrderNumber,
     });
 
     return NextResponse.json({ success: true });
