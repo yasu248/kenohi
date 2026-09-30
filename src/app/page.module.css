@@ -121,6 +121,44 @@
   box-shadow: var(--shadow-md);
 }
 
+/* 欠品商品カード */
+.menuItemSoldOut {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.menuItemSoldOut:hover {
+  transform: none;
+  box-shadow: var(--shadow-sm);
+}
+
+/* 欠品バッジ（画像上に重なる） */
+.soldOutBadge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  background: #ef4444;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* 商品名横の「受付停止中」ラベル */
+.soldOutLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #ef4444;
+  background: #fee2e2;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+
 .menuItemImage {
   width: 110px;
   height: 110px;

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power } from 'lucide-react';
+import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
 import QRCode from 'qrcode';
@@ -19,6 +19,8 @@ export default function KitchenMonitor() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string } | null>(null);
+  const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
+  const [pendingOpenDateStr, setPendingOpenDateStr] = useState<string | null>(null); // 開店保留中の日付
 
   // 注文データと店舗状態をAPIから取得
   const fetchOrders = useCallback(async (isInitial = false) => {
@@ -294,6 +296,10 @@ export default function KitchenMonitor() {
       } else {
         if (!confirm('注文の受付を開始しますか？')) return;
       }
+      // 開店確認OK後：欠品確認モーダルを表示
+      setPendingOpenDateStr(dateStr);
+      setShowSoldOutModal(true);
+      return; // モーダルの応答を待つ
     } else {
       if (!confirm('注文の受付を停止しますか？')) return;
     }
@@ -309,6 +315,43 @@ export default function KitchenMonitor() {
       console.error('店舗状態の更新に失敗しました', err);
       alert('更新に失敗しました');
     }
+  };
+
+  // 欠品確認モーダル：「はい」（商品管理へ）
+  const handleSoldOutYes = async () => {
+    setShowSoldOutModal(false);
+    if (!pendingOpenDateStr) return;
+    try {
+      await fetch('/api/store-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isManualOpen: true, date: pendingOpenDateStr, openedAt: Date.now() })
+      });
+      await fetchOrders();
+    } catch (err) {
+      console.error('店舗状態の更新に失敗しました', err);
+      alert('更新に失敗しました');
+    }
+    setPendingOpenDateStr(null);
+    window.location.href = '/kitchen/sold-out';
+  };
+
+  // 欠品確認モーダル：「いいえ」（そのまま開店）
+  const handleSoldOutNo = async () => {
+    setShowSoldOutModal(false);
+    if (!pendingOpenDateStr) return;
+    try {
+      await fetch('/api/store-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isManualOpen: true, date: pendingOpenDateStr, openedAt: Date.now() })
+      });
+      await fetchOrders();
+    } catch (err) {
+      console.error('店舗状態の更新に失敗しました', err);
+      alert('更新に失敗しました');
+    }
+    setPendingOpenDateStr(null);
   };
 
   const formatTime = (isoString: string) => {
@@ -367,6 +410,7 @@ export default function KitchenMonitor() {
   const completedOrders = orders.filter((o) => o.status === 'completed');
 
   return (
+    <>
     <main className={styles.kitchenContainer}>
 
 
@@ -415,15 +459,9 @@ export default function KitchenMonitor() {
               </button>
             );
           })()}
-          <button
-            className={styles.navLink}
-            onClick={() => {
-              const audio = new Audio('/chime.mp3');
-              audio.play().catch(() => alert('ブラウザの保護機能により再生できませんでした。画面内を1度クリックしてから再度お試しください。'));
-            }}
-            title="音テスト"
-          >
-            音テスト 🔊
+          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="商品管理（欠品設定）">
+            <PackageX size={16} />
+            商品管理
           </button>
           <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
             <BarChart size={16} />
@@ -698,5 +736,38 @@ export default function KitchenMonitor() {
         </div>
       </div>
     </main>
+
+      {/* 欠品確認モーダル */}
+      {showSoldOutModal && (
+        <div className={styles.soldOutModalOverlay}>
+          <div className={styles.soldOutModalCard}>
+            <div className={styles.soldOutModalIcon}>
+              <AlertCircle size={36} />
+            </div>
+            <h2 className={styles.soldOutModalTitle}>本日商品に欠品はありますか？</h2>
+            <p className={styles.soldOutModalDesc}>
+              欠品商品がある場合は、欠品設定を行ってから開店してください。<br />
+              なかった場合は「いいえ」を押すとそのまま受付を開始します。
+            </p>
+            <div className={styles.soldOutModalActions}>
+              <button
+                className={styles.soldOutModalBtnYes}
+                onClick={handleSoldOutYes}
+              >
+                <PackageX size={18} />
+                はい（欠品設定へ）
+              </button>
+              <button
+                className={styles.soldOutModalBtnNo}
+                onClick={handleSoldOutNo}
+              >
+                <Check size={18} />
+                いいえ（そのまま開店）
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

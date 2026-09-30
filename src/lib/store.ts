@@ -134,6 +134,7 @@ export interface StoreState {
   isManualOpen: boolean;
   date: string;
   openedAt?: number;
+  soldOutItems?: string[]; // 欠品中の商品IDリスト
 }
 
 export async function getStoreState(): Promise<StoreState | null> {

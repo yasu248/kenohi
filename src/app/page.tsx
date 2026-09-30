@@ -128,6 +128,7 @@ export default function Home() {
   const [myOrderStatus, setMyOrderStatus] = useState<'waiting' | 'called' | 'received' | null>(null);
   const [groupsAhead, setGroupsAhead] = useState<number | null>(null);
   const [isOpen, setIsOpen] = useState(true); // 初期状態をtrueにしておき、useEffectで判定
+  const [soldOutItems, setSoldOutItems] = useState<Set<string>>(new Set()); // 欠品商品IDセット
 
   // ページを開いた時点の時刻（日本時間）を保持
   const [pageLoadJstDate] = useState<Date>(() => {
@@ -171,6 +172,16 @@ export default function Home() {
         }
       } catch (err) {
         setIsOpen(false);
+      }
+      // 欠品商品を取得
+      try {
+        const soldRes = await fetch('/api/sold-out');
+        if (soldRes.ok) {
+          const soldData = await soldRes.json();
+          setSoldOutItems(new Set(soldData.soldOutItems ?? []));
+        }
+      } catch (err) {
+        // 欠品取得失敗しても継続
       }
     };
 
@@ -264,6 +275,7 @@ export default function Home() {
 
   const openOptionModal = (item: MenuItem) => {
     if (!isOpen) return; // 営業時間外はモーダルを開かない
+    if (soldOutItems.has(item.id)) return; // 欠品商品はモーダルを開かない
     setSelectedItem(item);
     setJelly('なし');
     setSweetness('普通');
@@ -501,18 +513,41 @@ export default function Home() {
 
       {/* Drink Menu */}
       <section className={styles.menuList} style={{ opacity: isOpen ? 1 : 0.6, pointerEvents: isOpen ? 'auto' : 'none' }}>
-        {MENU_ITEMS.map((item) => (
-          <div key={item.id} className={styles.menuItem} onClick={() => openOptionModal(item)}>
-            <img src={item.image} alt={item.name} className={styles.menuItemImage} />
-            <div className={styles.menuItemContent}>
-              <div>
-                <h3 className={styles.menuItemName}>{item.name}</h3>
-                <p className={styles.menuItemDesc}>{item.desc}</p>
+        {MENU_ITEMS.map((item) => {
+          const isSoldOut = soldOutItems.has(item.id);
+          return (
+            <div
+              key={item.id}
+              className={`${styles.menuItem} ${isSoldOut ? styles.menuItemSoldOut : ''}`}
+              onClick={() => openOptionModal(item)}
+              style={isSoldOut ? { cursor: 'default' } : undefined}
+            >
+              <div style={{ position: 'relative' }}>
+                <img
+                  src={item.image}
+                  alt={item.name}
+                  className={styles.menuItemImage}
+                  style={isSoldOut ? { filter: 'grayscale(70%) opacity(0.5)' } : undefined}
+                />
+                {isSoldOut && (
+                  <div className={styles.soldOutBadge}>
+                    本日欠品
+                  </div>
+                )}
               </div>
-              <span className={styles.menuItemPrice}>¥{item.price}</span>
+              <div className={styles.menuItemContent}>
+                <div>
+                  <h3 className={styles.menuItemName} style={isSoldOut ? { color: '#94a3b8' } : undefined}>
+                    {item.name}
+                    {isSoldOut && <span className={styles.soldOutLabel}> 受付停止中</span>}
+                  </h3>
+                  <p className={styles.menuItemDesc}>{item.desc}</p>
+                </div>
+                <span className={styles.menuItemPrice} style={isSoldOut ? { color: '#94a3b8' } : undefined}>¥{item.price}</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
       {/* Main Page Footer */}
