@@ -651,3 +651,179 @@
     gap: 10px;
   }
 }
+
+/* ──────────────── ダークモード対応 ──────────────── */
+@media (prefers-color-scheme: dark) {
+  .container {
+    background-color: #0b0f19;
+    color: #f8fafc;
+  }
+
+  .header {
+    background-color: #111827;
+    border-bottom-color: #1f2937;
+  }
+
+  .brandTitle {
+    color: #f8fafc;
+  }
+
+  .backBtn,
+  .refreshBtn {
+    background-color: #1f2937;
+    border-color: #374151;
+    color: #f8fafc;
+  }
+
+  .backBtn:hover,
+  .refreshBtn:hover:not(:disabled) {
+    background-color: #374151;
+    border-color: #4b5563;
+    color: #ffffff;
+  }
+
+  .dateSelectorLabel {
+    color: #94a3b8;
+  }
+
+  .dateTabBtn {
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+
+  .dateTabLabel {
+    color: #f8fafc;
+  }
+
+  .dateTabActive .dateTabLabel {
+    color: #34d399;
+  }
+
+  .dateTabActive {
+    background-color: #1f2937;
+    border-color: #10b981;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25), 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+
+  .dateTabBadge {
+    background-color: #1e3a8a;
+    color: #93c5fd;
+  }
+
+  .dateTabEmpty {
+    color: #64748b;
+  }
+
+  .reportMainCard {
+    background-color: #111827;
+    border-color: #1f2937;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .reportDateTitle {
+    color: #f8fafc;
+  }
+
+  .metricCard {
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+
+  .metricLabel {
+    color: #94a3b8;
+  }
+
+  .metricValue {
+    color: #f8fafc;
+  }
+
+  .metricRevenue {
+    background-color: #064e3b;
+    border-color: #047857;
+  }
+
+  .revenueText {
+    color: #34d399;
+  }
+
+  .tabContainer {
+    background-color: #1f2937;
+  }
+
+  .tabButton {
+    color: #94a3b8;
+  }
+
+  .tabActive {
+    background-color: #111827;
+    color: #f8fafc;
+  }
+
+  .orderListItem {
+    background-color: #1f2937;
+    border-color: #374151;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  }
+
+  .orderNoBadge {
+    color: #34d399;
+  }
+
+  .orderTime {
+    color: #94a3b8;
+  }
+
+  .orderItemName {
+    color: #f8fafc;
+  }
+
+  .orderItemOptions {
+    background-color: #111827;
+    border-color: #374151;
+    color: #94a3b8;
+  }
+
+  .orderItemSubtotal {
+    color: #cbd5e1;
+  }
+
+  .orderTotalPrice {
+    color: #34d399;
+  }
+
+  .orderListItems {
+    border-color: #374151;
+  }
+
+  .itemCard {
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+
+  .itemName {
+    color: #f8fafc;
+  }
+
+  .itemRevenue {
+    color: #94a3b8;
+  }
+
+  .itemQty {
+    color: #34d399;
+    background-color: #064e3b;
+    border-color: #047857;
+  }
+
+  .emptyDayState {
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+
+  .emptyTitle {
+    color: #f8fafc;
+  }
+
+  .emptyDesc {
+    color: #94a3b8;
+  }
+}

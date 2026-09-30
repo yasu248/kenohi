@@ -305,3 +305,84 @@
     padding: 16px;
   }
 }
+
+/* ──────────────── ダークモード対応 ──────────────── */
+@media (prefers-color-scheme: dark) {
+  .container {
+    background: #0b0f19;
+    color: #f8fafc;
+  }
+
+  .header {
+    background: #111827;
+    border-bottom-color: #1f2937;
+  }
+
+  .backButton {
+    background: #1f2937;
+    border-color: #374151;
+    color: #f8fafc;
+  }
+
+  .backButton:hover {
+    background: #374151;
+  }
+
+  .headerTitle {
+    color: #f8fafc;
+  }
+
+  .section {
+    background: #111827;
+    border-color: #1f2937;
+  }
+
+  .sectionHeader {
+    border-bottom-color: #1f2937;
+  }
+
+  .sectionTitle {
+    color: #f8fafc;
+  }
+
+  .sectionDesc {
+    color: #94a3b8;
+  }
+
+  .historyCard {
+    background: #1f2937;
+    border-color: #374151;
+  }
+
+  .historyDate {
+    color: #f8fafc;
+  }
+
+  .historyTime {
+    color: #94a3b8;
+  }
+
+  .soldOutNone {
+    color: #64748b;
+  }
+
+  .soldOutBadge {
+    background: #450a0a;
+    border-color: #991b1b;
+    color: #fca5a5;
+  }
+
+  .dangerCard {
+    background: #1f2937;
+    border-color: #7f1d1d;
+  }
+
+  .dangerTitle {
+    color: #f87171;
+  }
+
+  .dangerDesc {
+    color: #94a3b8;
+  }
+}
+

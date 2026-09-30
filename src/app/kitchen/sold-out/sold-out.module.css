@@ -474,3 +474,84 @@
   background: #f1f5f9;
   transform: translateY(-1px);
 }
+
+/* ──────────────── ダークモード対応 ──────────────── */
+@media (prefers-color-scheme: dark) {
+  .container {
+    background: #0b0f19;
+    color: #f8fafc;
+  }
+
+  .header {
+    background: #111827;
+    border-bottom-color: #1f2937;
+  }
+
+  .backButton {
+    background: #1f2937;
+    border-color: #374151;
+    color: #f8fafc;
+  }
+
+  .backButton:hover {
+    background: #374151;
+  }
+
+  .headerTitle {
+    color: #f8fafc;
+  }
+
+  .categoryCard {
+    background: #111827;
+    border-color: #1f2937;
+  }
+
+  .categoryHeader {
+    border-bottom-color: #1f2937;
+  }
+
+  .categoryTitle {
+    color: #f8fafc;
+  }
+
+  .categoryCount {
+    color: #94a3b8;
+  }
+
+  .itemCard {
+    background: #1f2937;
+    border-color: #374151;
+  }
+
+  .itemName {
+    color: #f8fafc;
+  }
+
+  .itemPrice {
+    color: #94a3b8;
+  }
+
+  .modalCard {
+    background: #1e293b;
+    border: 1px solid #374151;
+  }
+
+  .modalTitle {
+    color: #f8fafc;
+  }
+
+  .modalDesc {
+    color: #94a3b8;
+  }
+
+  .modalBtnDiscard {
+    background: #1f2937;
+    border-color: #374151;
+    color: #f8fafc;
+  }
+
+  .modalBtnDiscard:hover {
+    background: #374151;
+  }
+}
+
