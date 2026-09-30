@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle } from 'lucide-react';
+import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle, Settings } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
 import QRCode from 'qrcode';
@@ -18,7 +18,7 @@ export default function KitchenMonitor() {
   const [passwordError, setPasswordError] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string } | null>(null);
+  const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
   const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
   const [pendingOpenDateStr, setPendingOpenDateStr] = useState<string | null>(null); // 開店保留中の日付
 
@@ -442,6 +442,20 @@ export default function KitchenMonitor() {
             {lastUpdated
               ? `最終更新: ${lastUpdated.toLocaleTimeString('ja-JP')} — ${POLL_INTERVAL_MS / 1000}秒ごとに自動更新`
               : '接続中...'}
+            {storeState?.openedAt && isStoreCurrentlyOpen(storeState) && (
+              <span style={{
+                marginLeft: '16px',
+                padding: '2px 10px',
+                borderRadius: '12px',
+                backgroundColor: '#dbeafe',
+                color: '#1e40af',
+                border: '1px solid #bfdbfe',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+              }}>
+                🕐 開店時刻: {new Date(storeState.openedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
+              </span>
+            )}
           </span>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
@@ -467,9 +481,9 @@ export default function KitchenMonitor() {
             <BarChart size={16} />
             売上・履歴
           </button>
-          <button className={styles.navLink} onClick={handleClearOrders} title="注文クリア">
-            <Trash2 size={16} />
-            全注文クリア
+          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/admin'} title="システム管理">
+            <Settings size={16} />
+            システム管理
           </button>
           <button
             className={styles.navLink}
