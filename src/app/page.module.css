@@ -36,6 +36,14 @@
   gap: 6px;
 }
 
+.logoLight {
+  display: block;
+}
+
+.logoDark {
+  display: none;
+}
+
 .brandTextLogo {
   height: 32px;
   width: auto;
@@ -785,3 +793,250 @@
   line-height: 1.4;
   color: #991b1b;
 }
+
+/* ──────────────── モバイルオーダー顧客画面 ダークモード対応 ──────────────── */
+@media (prefers-color-scheme: dark) {
+  /* ロゴの白バージョン切り替え */
+  .logoLight {
+    display: none !important;
+  }
+
+  .logoDark {
+    display: inline-block !important;
+  }
+
+  /* ユーザープロファイル */
+  .userProfile {
+    background-color: #232d20;
+    border-color: rgba(163, 177, 138, 0.3);
+  }
+
+  .userName {
+    color: #e2e8f0;
+  }
+
+  /* ヒーローセクション */
+  .heroTag {
+    background-color: rgba(163, 177, 138, 0.2);
+    color: #a3b18a;
+  }
+
+  /* メニューリスト & カード */
+  .menuItem {
+    background-color: #1a1e17;
+    border-color: #2c3327;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+
+  .menuItemPrice {
+    color: #a3b18a;
+  }
+
+  .menuItemPlaceholder {
+    background-color: #232d20;
+    color: #a3b18a;
+  }
+
+  .soldOutLabel {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+  }
+
+  .soldOutBadge {
+    background: #dc2626;
+    color: #ffffff;
+  }
+
+  /* 営業時間外バナー */
+  .closedBanner {
+    background-color: rgba(239, 68, 68, 0.15);
+    border-color: #991b1b;
+    color: #fca5a5;
+  }
+
+  .closedTitle {
+    color: #f87171;
+  }
+
+  .closedDesc {
+    color: #fca5a5;
+  }
+
+  /* オプション選択モーダル */
+  .modalSheet {
+    background-color: #1a1e17;
+    border-top: 1px solid #2d3129;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.6);
+  }
+
+  .modalPrice {
+    color: #a3b18a;
+  }
+
+  .closeButton {
+    color: #94a3b8;
+  }
+
+  .closeButton:hover {
+    color: #f8fafc;
+  }
+
+  .optionTitle {
+    color: #cbd5e1;
+  }
+
+  .optionLabel {
+    background-color: #22281e;
+    border-color: #333d2e;
+    color: #e2e8f0;
+  }
+
+  .optionChip:checked + .optionLabel {
+    background-color: #a3b18a;
+    color: #121410;
+    border-color: #a3b18a;
+    font-weight: 800;
+  }
+
+  .disabledOptionLabel {
+    background-color: #171a15;
+    color: #64748b;
+    border-color: #262c22;
+  }
+
+  .qtyButton {
+    background-color: #22281e;
+    border-color: #374233;
+    color: #f8fafc;
+  }
+
+  .qtyValue {
+    color: #f8fafc;
+  }
+
+  .addToCartBtn {
+    background-color: #f4acb7;
+    color: #121410;
+    font-weight: 800;
+    box-shadow: 0 4px 15px rgba(244, 172, 183, 0.25);
+  }
+
+  .addToCartBtn:hover {
+    background-color: #e08594;
+  }
+
+  /* 画面下部カートバー */
+  .cartBar {
+    background-color: #223525;
+    border: 1px solid rgba(163, 177, 138, 0.4);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  }
+
+  .cartBadge {
+    background-color: #f4acb7;
+    color: #121410;
+  }
+
+  /* カートモーダル */
+  .cartItem {
+    border-color: #2c3327;
+  }
+
+  .cartItemPrice {
+    color: #a3b18a;
+  }
+
+  .removeCartItemBtn {
+    color: #f87171;
+  }
+
+  .removeCartItemBtn:hover {
+    background-color: rgba(239, 68, 68, 0.2);
+  }
+
+  .cartSummary {
+    border-color: #333d2e;
+  }
+
+  .stripeInfo {
+    background-color: #22281f;
+    color: #94a3b8;
+    border: 1px solid #2d3129;
+  }
+
+  .legalAgreement {
+    color: #94a3b8;
+  }
+
+  .legalLink {
+    color: #a3b18a;
+  }
+
+  .legalLink:hover {
+    color: #86efac;
+  }
+
+  /* 呼出バナー */
+  .callBanner {
+    background-color: #1c281e;
+    border-color: #f4acb7;
+  }
+
+  .callBannerTitle {
+    color: #94a3b8;
+  }
+
+  .myOrderSection {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .groupsAheadBadge {
+    background-color: #232d20;
+    color: #a3b18a;
+    border-color: #374233;
+  }
+
+  /* 注文完了画面 */
+  .orderNoBox {
+    background-color: rgba(163, 177, 138, 0.12);
+    border-color: #a3b18a;
+  }
+
+  .orderNoLabel {
+    color: #a3b18a;
+  }
+
+  .orderNoValue {
+    color: #a3b18a;
+  }
+
+  .groupsAheadText {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #e2e8f0;
+  }
+
+  .actionButton {
+    background-color: #a3b18a;
+    color: #121410;
+    font-weight: 800;
+  }
+
+  /* フッター */
+  .mainFooter {
+    border-color: #2c3327;
+  }
+
+  .footerLink {
+    color: #94a3b8;
+  }
+
+  .footerLink:hover {
+    color: #a3b18a;
+  }
+
+  .footerDivider {
+    color: #475569;
+  }
+}
+

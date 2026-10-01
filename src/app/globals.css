@@ -25,7 +25,10 @@
     --text-muted: #A0AEC0;
     --card-bg: #1A1D16;
     --border-color: #2D3129;
-    --shadow-md: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    --primary-dark: #A3B18A;
+    --primary-light: #232D20;
+    --shadow-md: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 20px 35px -5px rgba(0, 0, 0, 0.6);
   }
 }
 

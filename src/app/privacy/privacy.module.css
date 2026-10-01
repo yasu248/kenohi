@@ -109,3 +109,24 @@
   color: var(--text-muted);
   padding: 16px 0;
 }
+
+@media (prefers-color-scheme: dark) {
+  .card {
+    background-color: #1a1e17;
+    border-color: #2c3327;
+  }
+
+  .sectionTitle {
+    color: #a3b18a;
+    border-bottom-color: #232d20;
+  }
+
+  .iconWrapper {
+    background-color: #232d20;
+    color: #a3b18a;
+  }
+
+  .backBtn:hover {
+    color: #a3b18a;
+  }
+}

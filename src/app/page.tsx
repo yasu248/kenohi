@@ -428,8 +428,12 @@ export default function Home() {
       <header className={styles.header}>
         <div className={styles.brand}>
           <div className={styles.brandLogoContainer}>
-            <img src="/IconLineApp.png" alt="けのちゃ" className={styles.brandLogo} />
-            <img src="/kenocha_logo_text.png" alt="けのちゃ KENOCHA" className={styles.brandTextLogo} />
+            {/* Light Mode Logos */}
+            <img src="/IconLineApp.png" alt="けのちゃ" className={`${styles.brandLogo} ${styles.logoLight}`} />
+            <img src="/kenocha_logo_text.png" alt="けのちゃ KENOCHA" className={`${styles.brandTextLogo} ${styles.logoLight}`} />
+            {/* Dark Mode Logos */}
+            <img src="/IconLineApp_white.png" alt="けのちゃ" className={`${styles.brandLogo} ${styles.logoDark}`} />
+            <img src="/kenocha_logo_text_white.png" alt="けのちゃ KENOCHA" className={`${styles.brandTextLogo} ${styles.logoDark}`} />
           </div>
         </div>
         {profile && (
