@@ -94,8 +94,9 @@ export default function KitchenMonitor() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       const now = Date.now();
-      // 入力間隔が200ms以上空いた場合は手入力とみなしてバッファをクリア
-      if (now - lastKeyTime > 200) {
+      // 入力間隔が1000ms以上空いた場合は手入力とみなしてバッファをクリア
+      // スキャナーによっては入力間隔が少し遅い場合があるため余裕を持たせる
+      if (now - lastKeyTime > 1000) {
         buffer = '';
       }
       lastKeyTime = now;
@@ -103,11 +104,12 @@ export default function KitchenMonitor() {
       if (e.key === 'Enter') {
         const upperBuffer = buffer.toUpperCase();
         if (upperBuffer.startsWith('QRKENOCHA-')) {
-          // 元の大文字小文字を保ったままではなく、システムに合わせて大文字にして処理する
           handleScan(upperBuffer);
         }
+        // 万が一別のものをスキャンした場合もバッファはリセット
         buffer = '';
-      } else {
+      } else if (e.key.length === 1) {
+        // Shiftなどの制御キー（文字数が2文字以上）を除外し、純粋な1文字の入力のみをバッファに追加
         buffer += e.key;
       }
     };
@@ -219,11 +221,19 @@ export default function KitchenMonitor() {
     htmlContent += `</body></html>`;
 
     // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用, cut=partial でパーシャルカット)
-    // PassPRNTは back パラメータが必須のため付与します。
-    // ※iOSの仕様上、どうしても新しいタブで開かれてしまいますが、
-    // localStorageのおかげでそのままキッチン画面が復元されます。
     const backUrl = encodeURIComponent(window.location.href.split('?')[0]);
-    const passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
+    
+    // ユーザーエージェントを判定してAndroidかどうかチェック
+    const isAndroid = /android/i.test(navigator.userAgent);
+    
+    let passprntUrl = '';
+    if (isAndroid) {
+      // Android Chrome用のIntentスキーム
+      passprntUrl = `intent://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial#Intent;scheme=starpassprnt;package=com.starmicronics.passprnt;end;`;
+    } else {
+      // iOS用のスキーム
+      passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
+    }
 
     window.location.href = passprntUrl;
   };
