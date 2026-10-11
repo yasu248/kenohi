@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle, Settings } from 'lucide-react';
+import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle, Settings, Printer } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
 import QRCode from 'qrcode';
@@ -21,6 +21,7 @@ export default function KitchenMonitor() {
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
   const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
   const [pendingOpenDateStr, setPendingOpenDateStr] = useState<string | null>(null); // 開店保留中の日付
+  const [printingStatus, setPrintingStatus] = useState<string | null>(null); // 複数杯連続印刷ステータス
 
   // 注文データと店舗状態をAPIから取得
   const fetchOrders = useCallback(async (isInitial = false) => {
@@ -83,6 +84,90 @@ export default function KitchenMonitor() {
       setPasswordInput('');
     }
   };
+
+  const launchPassPrnt = (htmlContent: string) => {
+    const backUrl = encodeURIComponent(window.location.href.split('?')[0]);
+    const isAndroid = /android/i.test(navigator.userAgent);
+
+    let passprntUrl = '';
+    if (isAndroid) {
+      // Android Chrome用のIntentスキーム (スター精密公式パッケージID: jp.star_m.passprnt)
+      passprntUrl = `intent://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial#Intent;scheme=starpassprnt;package=jp.star_m.passprnt;end;`;
+    } else {
+      // iOS用のスキーム
+      passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
+    }
+
+    window.location.href = passprntUrl;
+  };
+
+  const cancelPrintQueue = () => {
+    sessionStorage.removeItem('kitchen_print_queue');
+    setPrintingStatus(null);
+  };
+
+  // ─── 複数杯自動印刷キュー処理 ───
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    let isProcessing = false;
+
+    const processNextQueue = () => {
+      if (isProcessing) return;
+      const raw = sessionStorage.getItem('kitchen_print_queue');
+      if (!raw) {
+        setPrintingStatus(null);
+        return;
+      }
+      try {
+        const queueData = JSON.parse(raw);
+        if (!queueData || !queueData.items || queueData.items.length === 0) {
+          sessionStorage.removeItem('kitchen_print_queue');
+          setPrintingStatus(null);
+          return;
+        }
+        // 3分以上古いキューは破棄
+        if (Date.now() - queueData.timestamp > 3 * 60 * 1000) {
+          sessionStorage.removeItem('kitchen_print_queue');
+          setPrintingStatus(null);
+          return;
+        }
+
+        isProcessing = true;
+        const nextHtml = queueData.items.shift();
+        const currentNum = queueData.total - queueData.items.length;
+        setPrintingStatus(`注文 #${queueData.orderNumber} を印刷中 (${currentNum}/${queueData.total}杯)`);
+
+        if (queueData.items.length > 0) {
+          queueData.timestamp = Date.now();
+          sessionStorage.setItem('kitchen_print_queue', JSON.stringify(queueData));
+        } else {
+          sessionStorage.removeItem('kitchen_print_queue');
+        }
+
+        // ブラウザ復帰直後の描画が安定するまで少し待ってからPassPRNTを呼び出す
+        timer = setTimeout(() => {
+          launchPassPrnt(nextHtml);
+        }, 800);
+      } catch (err) {
+        sessionStorage.removeItem('kitchen_print_queue');
+        setPrintingStatus(null);
+      }
+    };
+
+    processNextQueue();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        processNextQueue();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   // ─── スキャナー用キーストローク監視 ───
   useEffect(() => {
@@ -161,31 +246,9 @@ export default function KitchenMonitor() {
     // 1. 即座にステータスを変更
     handleStatusChange(order.id, 'preparing', false);
 
-    // 2. PassPRNT用のHTML組み立て
-    let htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
-          /* 左右に4mmずつの余白を設定 */
-          .label { width: 100%; padding: 5px 4mm; box-sizing: border-box; page-break-after: always; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
-          .left-col { flex: 1; text-align: left; padding-right: 2mm; }
-          /* 右カラムの中身（QR画像）を限界まで右に寄せる */
-          .right-col { width: 28mm; flex-shrink: 0; display: flex; justify-content: flex-end; }
-          .title { font-size: 24px; font-weight: bold; margin-bottom: 6px; display: flex; align-items: baseline; }
-          .cup-info { font-size: 18px; font-weight: bold; margin-left: 8px; color: #111; }
-          .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
-          .options { font-size: 20px; font-weight: normal; margin-bottom: 0; line-height: 1.1; }
-          img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0 0 0 auto; }
-        </style>
-      </head>
-      <body>
-    `;
-
     const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
     let currentCup = 1;
+    const cupHtmlList: string[] = [];
 
     for (const item of order.items) {
       const itemIndex = order.items.indexOf(item);
@@ -200,18 +263,40 @@ export default function KitchenMonitor() {
         try {
           // margin: 0 でQRコード内部の白いフチを消し、widthを大きくして画質を上げます
           const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 300 });
-          htmlContent += `
-            <div class="label">
-              <div class="left-col">
-                <div class="title">#${order.orderNumber}<span class="cup-info">${totalCups > 1 ? `${totalCups}杯 (${currentCup}/${totalCups})` : `${totalCups}杯`}</span></div>
-                <div class="subtitle">${baseName}</div>
-                <div class="options">${opts}</div>
+          const singleCupHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body { margin: 0; padding: 0; font-family: sans-serif; width: 100%; }
+                /* 左右に4mmずつの余白を設定 */
+                .label { width: 100%; padding: 5px 4mm; box-sizing: border-box; display: flex; flex-direction: row; align-items: flex-start; justify-content: space-between; }
+                .left-col { flex: 1; text-align: left; padding-right: 2mm; }
+                /* 右カラムの中身（QR画像）を限界まで右に寄せる */
+                .right-col { width: 28mm; flex-shrink: 0; display: flex; justify-content: flex-end; }
+                .title { font-size: 24px; font-weight: bold; margin-bottom: 6px; display: flex; align-items: baseline; }
+                .cup-info { font-size: 18px; font-weight: bold; margin-left: 8px; color: #111; }
+                .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
+                .options { font-size: 20px; font-weight: normal; margin-bottom: 0; line-height: 1.1; }
+                img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0 0 0 auto; }
+              </style>
+            </head>
+            <body>
+              <div class="label">
+                <div class="left-col">
+                  <div class="title">#${order.orderNumber}<span class="cup-info">${totalCups > 1 ? `${totalCups}杯 (${currentCup}/${totalCups})` : `${totalCups}杯`}</span></div>
+                  <div class="subtitle">${baseName}</div>
+                  <div class="options">${opts}</div>
+                </div>
+                <div class="right-col">
+                  <img src="${qrDataUrl}" />
+                </div>
               </div>
-              <div class="right-col">
-                <img src="${qrDataUrl}" />
-              </div>
-            </div>
+            </body>
+            </html>
           `;
+          cupHtmlList.push(singleCupHtml);
         } catch (err) {
           console.error("QR Code generation failed", err);
         }
@@ -219,24 +304,25 @@ export default function KitchenMonitor() {
       }
     }
 
-    htmlContent += `</body></html>`;
+    if (cupHtmlList.length === 0) return;
 
-    // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用, cut=partial でパーシャルカット)
-    const backUrl = encodeURIComponent(window.location.href.split('?')[0]);
-
-    // ユーザーエージェントを判定してAndroidかどうかチェック
-    const isAndroid = /android/i.test(navigator.userAgent);
-
-    let passprntUrl = '';
-    if (isAndroid) {
-      // Android Chrome用のIntentスキーム (スター精密公式パッケージID: jp.star_m.passprnt)
-      passprntUrl = `intent://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial#Intent;scheme=starpassprnt;package=jp.star_m.passprnt;end;`;
+    // 1杯目を取り出し、残りの杯があればキューとしてsessionStorageに保存
+    const firstCupHtml = cupHtmlList.shift()!;
+    if (cupHtmlList.length > 0) {
+      sessionStorage.setItem('kitchen_print_queue', JSON.stringify({
+        items: cupHtmlList,
+        total: totalCups,
+        orderNumber: order.orderNumber,
+        timestamp: Date.now()
+      }));
+      setPrintingStatus(`注文 #${order.orderNumber} を印刷中 (1/${totalCups}杯)`);
     } else {
-      // iOS用のスキーム
-      passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
+      sessionStorage.removeItem('kitchen_print_queue');
+      setPrintingStatus(null);
     }
 
-    window.location.href = passprntUrl;
+    // 1杯目を印刷
+    launchPassPrnt(firstCupHtml);
   };
 
   const handleStatusChange = async (orderId: string, nextStatus: Order['status'], isManual = true) => {
@@ -541,6 +627,43 @@ export default function KitchenMonitor() {
           }
           return null;
         })()}
+
+        {/* 複数杯連続印刷中のステータスバナー */}
+        {printingStatus && (
+          <div style={{
+            backgroundColor: '#3b82f6',
+            color: '#ffffff',
+            padding: '14px 20px',
+            margin: '0 20px 20px 20px',
+            borderRadius: '8px',
+            boxShadow: '0 4px 6px rgba(59, 130, 246, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontWeight: 'bold',
+            fontSize: '1rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Printer size={22} />
+              <span>{printingStatus}</span>
+            </div>
+            <button
+              onClick={cancelPrintQueue}
+              style={{
+                backgroundColor: '#ffffff',
+                color: '#1d4ed8',
+                border: 'none',
+                padding: '6px 14px',
+                borderRadius: '6px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                fontSize: '0.85rem'
+              }}
+            >
+              印刷キューを中止
+            </button>
+          </div>
+        )}
 
         {/* Kanban Board Grid */}
         <div className={styles.kanbanGrid}>
