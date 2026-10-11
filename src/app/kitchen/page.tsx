@@ -222,10 +222,10 @@ export default function KitchenMonitor() {
 
     // 3. PassPRNT URLスキームへリダイレクト (size=2 は 58mm幅用, cut=partial でパーシャルカット)
     const backUrl = encodeURIComponent(window.location.href.split('?')[0]);
-    
+
     // ユーザーエージェントを判定してAndroidかどうかチェック
     const isAndroid = /android/i.test(navigator.userAgent);
-    
+
     let passprntUrl = '';
     if (isAndroid) {
       // Android Chrome用のIntentスキーム (スター精密公式パッケージID: jp.star_m.passprnt)
@@ -421,312 +421,312 @@ export default function KitchenMonitor() {
 
   return (
     <>
-    <main className={styles.kitchenContainer}>
+      <main className={styles.kitchenContainer}>
 
 
-      {/* Kitchen Header */}
-      <header className={styles.kitchenHeader}>
-        <div>
-          <h1 className={styles.kitchenTitle}>
-            <Coffee size={28} />
-            店舗用キッチンモニター
+        {/* Kitchen Header */}
+        <header className={styles.kitchenHeader}>
+          <div>
+            <h1 className={styles.kitchenTitle}>
+              <Coffee size={28} />
+              店舗用キッチンモニター
+              {storeState && (() => {
+                const isCurrentlyOpen = isStoreCurrentlyOpen(storeState);
+                return (
+                  <span style={{
+                    marginLeft: '12px',
+                    fontSize: '0.8rem',
+                    padding: '4px 12px',
+                    borderRadius: '20px',
+                    backgroundColor: isCurrentlyOpen ? '#dcfce7' : '#fee2e2',
+                    color: isCurrentlyOpen ? '#166534' : '#b91c1c',
+                    border: `1px solid ${isCurrentlyOpen ? '#bbf7d0' : '#fecaca'}`,
+                    verticalAlign: 'middle'
+                  }}>
+                    {isCurrentlyOpen ? '● 注文受付中' : '■ 受付停止中'}
+                  </span>
+                );
+              })()}
+            </h1>
+            <span className={styles.kitchenSub}>
+              {lastUpdated
+                ? `最終更新: ${lastUpdated.toLocaleTimeString('ja-JP')} — ${POLL_INTERVAL_MS / 1000}秒ごとに自動更新`
+                : '接続中...'}
+              {storeState?.openedAt && isStoreCurrentlyOpen(storeState) && (
+                <span style={{
+                  marginLeft: '16px',
+                  padding: '2px 10px',
+                  borderRadius: '12px',
+                  backgroundColor: '#dbeafe',
+                  color: '#1e40af',
+                  border: '1px solid #bfdbfe',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                }}>
+                  🕐 開店時刻: {new Date(storeState.openedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
+                </span>
+              )}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
             {storeState && (() => {
               const isCurrentlyOpen = isStoreCurrentlyOpen(storeState);
               return (
-                <span style={{
-                  marginLeft: '12px',
-                  fontSize: '0.8rem',
-                  padding: '4px 12px',
-                  borderRadius: '20px',
-                  backgroundColor: isCurrentlyOpen ? '#dcfce7' : '#fee2e2',
-                  color: isCurrentlyOpen ? '#166534' : '#b91c1c',
-                  border: `1px solid ${isCurrentlyOpen ? '#bbf7d0' : '#fecaca'}`,
-                  verticalAlign: 'middle'
-                }}>
-                  {isCurrentlyOpen ? '● 注文受付中' : '■ 受付停止中'}
-                </span>
+                <button
+                  className={styles.navLink}
+                  style={{ backgroundColor: isCurrentlyOpen ? '#fee2e2' : 'var(--primary-green)', color: isCurrentlyOpen ? '#b91c1c' : '#fff' }}
+                  onClick={handleToggleStoreOpen}
+                  title={isCurrentlyOpen ? "受付を停止する" : "受付を開始する"}
+                >
+                  <Power size={16} />
+                  {isCurrentlyOpen ? '受付停止にする' : '受付を開始する'}
+                </button>
               );
             })()}
-          </h1>
-          <span className={styles.kitchenSub}>
-            {lastUpdated
-              ? `最終更新: ${lastUpdated.toLocaleTimeString('ja-JP')} — ${POLL_INTERVAL_MS / 1000}秒ごとに自動更新`
-              : '接続中...'}
-            {storeState?.openedAt && isStoreCurrentlyOpen(storeState) && (
-              <span style={{
-                marginLeft: '16px',
-                padding: '2px 10px',
-                borderRadius: '12px',
-                backgroundColor: '#dbeafe',
-                color: '#1e40af',
-                border: '1px solid #bfdbfe',
-                fontSize: '0.8rem',
-                fontWeight: 700,
-              }}>
-                🕐 開店時刻: {new Date(storeState.openedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
-              </span>
-            )}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          {storeState && (() => {
-            const isCurrentlyOpen = isStoreCurrentlyOpen(storeState);
+            <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="欠品管理">
+              <PackageX size={16} />
+              欠品管理
+            </button>
+            <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
+              <BarChart size={16} />
+              売上・履歴
+            </button>
+            <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/admin'} title="システム管理">
+              <Settings size={16} />
+              システム管理
+            </button>
+            <button
+              className={styles.navLink}
+              onClick={() => {
+                sessionStorage.removeItem('kitchen_auth');
+                setAuthed(false);
+              }}
+              title="ログアウト"
+            >
+              <Lock size={16} />
+              ログアウト
+            </button>
+          </div>
+        </header>
+
+        {/* 停止中のみ表示される赤色で目立つバナー */}
+        {storeState && (() => {
+          const isCurrentlyOpen = isStoreCurrentlyOpen(storeState);
+          if (!isCurrentlyOpen) {
             return (
-              <button
-                className={styles.navLink}
-                style={{ backgroundColor: isCurrentlyOpen ? '#fee2e2' : 'var(--primary-green)', color: isCurrentlyOpen ? '#b91c1c' : '#fff' }}
-                onClick={handleToggleStoreOpen}
-                title={isCurrentlyOpen ? "受付を停止する" : "受付を開始する"}
-              >
-                <Power size={16} />
-                {isCurrentlyOpen ? '受付停止にする' : '受付を開始する'}
-              </button>
+              <div style={{
+                backgroundColor: '#ef4444',
+                color: '#ffffff',
+                padding: '16px',
+                textAlign: 'center',
+                fontWeight: 'bold',
+                fontSize: '1.2rem',
+                margin: '0 20px 20px 20px',
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px rgba(239, 68, 68, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}>
+                <Power size={24} />
+                現在、注文受付システムは【オフ】になっています。お客様は注文できません。
+              </div>
             );
-          })()}
-          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="欠品管理">
-            <PackageX size={16} />
-            欠品管理
-          </button>
-          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/history'} title="売上・履歴">
-            <BarChart size={16} />
-            売上・履歴
-          </button>
-          <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/admin'} title="システム管理">
-            <Settings size={16} />
-            システム管理
-          </button>
-          <button
-            className={styles.navLink}
-            onClick={() => {
-              sessionStorage.removeItem('kitchen_auth');
-              setAuthed(false);
-            }}
-            title="ログアウト"
-          >
-            <Lock size={16} />
-            ログアウト
-          </button>
-        </div>
-      </header>
+          }
+          return null;
+        })()}
 
-      {/* 停止中のみ表示される赤色で目立つバナー */}
-      {storeState && (() => {
-        const isCurrentlyOpen = isStoreCurrentlyOpen(storeState);
-        if (!isCurrentlyOpen) {
-          return (
-            <div style={{
-              backgroundColor: '#ef4444',
-              color: '#ffffff',
-              padding: '16px',
-              textAlign: 'center',
-              fontWeight: 'bold',
-              fontSize: '1.2rem',
-              margin: '0 20px 20px 20px',
-              borderRadius: '8px',
-              boxShadow: '0 4px 6px rgba(239, 68, 68, 0.3)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px'
-            }}>
-              <Power size={24} />
-              現在、注文受付システムは【オフ】になっています。お客様は注文できません。
+        {/* Kanban Board Grid */}
+        <div className={styles.kanbanGrid}>
+          {/* Column 1: Pending */}
+          <div className={styles.kanbanColumn}>
+            <div className={styles.columnHeader}>
+              <h2 className={styles.columnTitle}>
+                <Users size={18} style={{ color: 'var(--accent-pink)' }} />
+                新規注文 (受付待ち)
+              </h2>
+              <span className={styles.columnCount}>{pendingOrders.length}件</span>
             </div>
-          );
-        }
-        return null;
-      })()}
 
-      {/* Kanban Board Grid */}
-      <div className={styles.kanbanGrid}>
-        {/* Column 1: Pending */}
-        <div className={styles.kanbanColumn}>
-          <div className={styles.columnHeader}>
-            <h2 className={styles.columnTitle}>
-              <Users size={18} style={{ color: 'var(--accent-pink)' }} />
-              新規注文 (受付待ち)
-            </h2>
-            <span className={styles.columnCount}>{pendingOrders.length}件</span>
+            <div className={styles.orderList}>
+              {pendingOrders.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <span className={styles.emptyText}>現在、新規注文はありません</span>
+                </div>
+              ) : (
+                pendingOrders.map((order) => (
+                  <div key={order.id} className={`${styles.orderCard} ${styles.pendingCard}`}>
+                    <div className={styles.cardHeader}>
+                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
+                    </div>
+
+                    <div className={styles.itemDetails}>
+                      {order.items.map((item, idx) => (
+                        <div key={idx} className={styles.drinkItem}>
+                          <span className={styles.drinkName}>
+                            {item.name.split(' (')[0]}
+                            <span className={styles.drinkQty}> × {item.quantity}</span>
+                          </span>
+                          <span className={styles.drinkOpts}>
+                            {item.name.includes('(')
+                              ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
+                              : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={styles.cardActions}>
+                      <button
+                        className={styles.btnPrimary}
+                        onClick={() => handleStartPreparing(order)}
+                      >
+                        <Play size={14} />
+                        調理を開始する
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
-          <div className={styles.orderList}>
-            {pendingOrders.length === 0 ? (
-              <div className={styles.emptyState}>
-                <span className={styles.emptyText}>現在、新規注文はありません</span>
-              </div>
-            ) : (
-              pendingOrders.map((order) => (
-                <div key={order.id} className={`${styles.orderCard} ${styles.pendingCard}`}>
-                  <div className={styles.cardHeader}>
-                    <span className={styles.orderNo}>#{order.orderNumber}</span>
-                    <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
-                  </div>
+          {/* Column 2: Preparing */}
+          <div className={styles.kanbanColumn}>
+            <div className={styles.columnHeader}>
+              <h2 className={styles.columnTitle}>
+                <Coffee size={18} style={{ color: '#3b82f6' }} />
+                調理中 (作成中)
+              </h2>
+              <span className={styles.columnCount}>{preparingOrders.length}件</span>
+            </div>
 
-                  <div className={styles.itemDetails}>
-                    {order.items.map((item, idx) => (
-                      <div key={idx} className={styles.drinkItem}>
-                        <span className={styles.drinkName}>
-                          {item.name.split(' (')[0]}
-                          <span className={styles.drinkQty}> × {item.quantity}</span>
-                        </span>
-                        <span className={styles.drinkOpts}>
-                          {item.name.includes('(')
-                            ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
-                            : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className={styles.cardActions}>
-                    <button
-                      className={styles.btnPrimary}
-                      onClick={() => handleStartPreparing(order)}
-                    >
-                      <Play size={14} />
-                      調理を開始する
-                    </button>
-                  </div>
+            <div className={styles.orderList}>
+              {preparingOrders.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <span className={styles.emptyText}>調理中の注文はありません</span>
                 </div>
-              ))
-            )}
+              ) : (
+                preparingOrders.map((order) => (
+                  <div key={order.id} className={`${styles.orderCard} ${styles.preparingCard}`}>
+                    <div className={styles.cardHeader} style={{ position: 'relative', paddingRight: '60px' }}>
+                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
+                      <button
+                        onClick={() => handleStatusChange(order.id, 'pending')}
+                        style={{
+                          position: 'absolute',
+                          top: '-4px',
+                          right: '-4px',
+                          background: 'none',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '4px',
+                          color: '#64748b',
+                          cursor: 'pointer',
+                          padding: '4px 6px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          fontSize: '0.7rem',
+                          gap: '2px',
+                          backgroundColor: '#f8fafc'
+                        }}
+                        title="新規注文に戻す"
+                      >
+                        <ArrowLeft size={10} />
+                        戻す
+                      </button>
+                    </div>
+
+                    <div className={styles.itemDetails}>
+                      {order.items.map((item, idx) => (
+                        <div key={idx} className={styles.drinkItem}>
+                          <span className={styles.drinkName}>
+                            {item.name.split(' (')[0]}
+                            <span className={styles.drinkQty}> × {item.quantity}</span>
+                          </span>
+                          <span className={styles.drinkOpts}>
+                            {item.name.includes('(')
+                              ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
+                              : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={styles.cardActions}>
+                      <button
+                        className={styles.btnPrimary}
+                        style={{ backgroundColor: '#3b82f6' }}
+                        onClick={() => handleStatusChange(order.id, 'completed')}
+                      >
+                        <Check size={14} />
+                        調理完了・呼出
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Column 3: Completed */}
+          <div className={styles.kanbanColumn}>
+            <div className={styles.columnHeader}>
+              <h2 className={styles.columnTitle}>
+                <CheckSquare size={18} style={{ color: 'var(--primary-green)' }} />
+                受渡可能 (呼出中)
+              </h2>
+              <span className={styles.columnCount}>{completedOrders.length}件</span>
+            </div>
+
+            <div className={styles.orderList}>
+              {completedOrders.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <span className={styles.emptyText}>受渡待ちの注文はありません</span>
+                </div>
+              ) : (
+                completedOrders.map((order) => (
+                  <div key={order.id} className={`${styles.orderCard} ${styles.completedCard}`}>
+                    <div className={styles.cardHeader}>
+                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
+                    </div>
+
+                    <div className={styles.itemDetails}>
+                      {order.items.map((item, idx) => (
+                        <div key={idx} className={styles.drinkItem}>
+                          <span className={styles.drinkName}>
+                            {item.name.split(' (')[0]}
+                            <span className={styles.drinkQty}> × {item.quantity}</span>
+                          </span>
+                          <span className={styles.drinkOpts}>
+                            {item.name.includes('(')
+                              ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
+                              : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={styles.cardActions}>
+                      <button
+                        className={styles.btnPrimary}
+                        style={{ backgroundColor: 'var(--primary-green)' }}
+                        onClick={() => handleStatusChange(order.id, 'cancelled')}
+                      >
+                        <Trash size={14} />
+                        受渡完了 (閉じる)
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Column 2: Preparing */}
-        <div className={styles.kanbanColumn}>
-          <div className={styles.columnHeader}>
-            <h2 className={styles.columnTitle}>
-              <Coffee size={18} style={{ color: '#3b82f6' }} />
-              調理中 (作成中)
-            </h2>
-            <span className={styles.columnCount}>{preparingOrders.length}件</span>
-          </div>
-
-          <div className={styles.orderList}>
-            {preparingOrders.length === 0 ? (
-              <div className={styles.emptyState}>
-                <span className={styles.emptyText}>調理中の注文はありません</span>
-              </div>
-            ) : (
-              preparingOrders.map((order) => (
-                <div key={order.id} className={`${styles.orderCard} ${styles.preparingCard}`}>
-                  <div className={styles.cardHeader} style={{ position: 'relative', paddingRight: '60px' }}>
-                    <span className={styles.orderNo}>#{order.orderNumber}</span>
-                    <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
-                    <button
-                      onClick={() => handleStatusChange(order.id, 'pending')}
-                      style={{
-                        position: 'absolute',
-                        top: '-4px',
-                        right: '-4px',
-                        background: 'none',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '4px',
-                        color: '#64748b',
-                        cursor: 'pointer',
-                        padding: '4px 6px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        fontSize: '0.7rem',
-                        gap: '2px',
-                        backgroundColor: '#f8fafc'
-                      }}
-                      title="新規注文に戻す"
-                    >
-                      <ArrowLeft size={10} />
-                      戻す
-                    </button>
-                  </div>
-
-                  <div className={styles.itemDetails}>
-                    {order.items.map((item, idx) => (
-                      <div key={idx} className={styles.drinkItem}>
-                        <span className={styles.drinkName}>
-                          {item.name.split(' (')[0]}
-                          <span className={styles.drinkQty}> × {item.quantity}</span>
-                        </span>
-                        <span className={styles.drinkOpts}>
-                          {item.name.includes('(')
-                            ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
-                            : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className={styles.cardActions}>
-                    <button
-                      className={styles.btnPrimary}
-                      style={{ backgroundColor: '#3b82f6' }}
-                      onClick={() => handleStatusChange(order.id, 'completed')}
-                    >
-                      <Check size={14} />
-                      調理完了・呼出
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Column 3: Completed */}
-        <div className={styles.kanbanColumn}>
-          <div className={styles.columnHeader}>
-            <h2 className={styles.columnTitle}>
-              <CheckSquare size={18} style={{ color: 'var(--primary-green)' }} />
-              受渡可能 (呼出中)
-            </h2>
-            <span className={styles.columnCount}>{completedOrders.length}件</span>
-          </div>
-
-          <div className={styles.orderList}>
-            {completedOrders.length === 0 ? (
-              <div className={styles.emptyState}>
-                <span className={styles.emptyText}>受渡待ちの注文はありません</span>
-              </div>
-            ) : (
-              completedOrders.map((order) => (
-                <div key={order.id} className={`${styles.orderCard} ${styles.completedCard}`}>
-                  <div className={styles.cardHeader}>
-                    <span className={styles.orderNo}>#{order.orderNumber}</span>
-                    <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
-                  </div>
-
-                  <div className={styles.itemDetails}>
-                    {order.items.map((item, idx) => (
-                      <div key={idx} className={styles.drinkItem}>
-                        <span className={styles.drinkName}>
-                          {item.name.split(' (')[0]}
-                          <span className={styles.drinkQty}> × {item.quantity}</span>
-                        </span>
-                        <span className={styles.drinkOpts}>
-                          {item.name.includes('(')
-                            ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
-                            : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className={styles.cardActions}>
-                    <button
-                      className={styles.btnPrimary}
-                      style={{ backgroundColor: 'var(--primary-green)' }}
-                      onClick={() => handleStatusChange(order.id, 'cancelled')}
-                    >
-                      <Trash size={14} />
-                      受渡完了 (閉じる)
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-    </main>
+      </main>
 
       {/* 欠品確認モーダル */}
       {showSoldOutModal && (
