@@ -9,28 +9,26 @@ export const CLOSED_DATES = [
 
 export function isBusinessHours(date: Date = new Date()): boolean {
   // Convert date to JST (Asia/Tokyo) string
-  const jstString = date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
-  const jstDate = new Date(jstString);
+  // const jstString = date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+  // const jstDate = new Date(jstString);
+  // const year = jstDate.getFullYear();
+  // const month = String(jstDate.getMonth() + 1).padStart(2, '0');
+  // const day = String(jstDate.getDate()).padStart(2, '0');
+  // const dateString = `${year}-${month}-${day}`;
+  // const dayOfWeek = jstDate.getDay();
+  // const hours = jstDate.getHours();
 
-  const year = jstDate.getFullYear();
-  const month = String(jstDate.getMonth() + 1).padStart(2, '0');
-  const day = String(jstDate.getDate()).padStart(2, '0');
-  const dateString = `${year}-${month}-${day}`;
+  // 1. 土日は定休（コメントアウト中）
+  // if (dayOfWeek === 0 || dayOfWeek === 6) {
+  //   return false;
+  // }
 
-  const dayOfWeek = jstDate.getDay();
-  const hours = jstDate.getHours();
+  // 2. 祝日・臨時休業日をチェック（コメントアウト中）
+  // if (CLOSED_DATES.includes(dateString)) {
+  //   return false;
+  // }
 
-  // 1. 土日は定休
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    return false;
-  }
-
-  // 2. 祝日・臨時休業日をチェック
-  if (CLOSED_DATES.includes(dateString)) {
-    return false;
-  }
-
-  // 時間の判定は isStoreCurrentlyOpen に完全に委譲するため、ここでは営業日（平日）であれば true を返すように変更
+  // 土日祝日の自動休業判定を無効化し、手動開店状態（isStoreCurrentlyOpen）に委譲
   return true;
 }
 
