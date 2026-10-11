@@ -17,6 +17,27 @@ export default function KitchenMonitor() {
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [printedCups, setPrintedCups] = useState<Record<string, number[]>>({});
+  const [scannedCups, setScannedCups] = useState<Record<string, string[]>>({});
+
+  const ordersRef = React.useRef(orders);
+  ordersRef.current = orders;
+
+  const scannedCupsRef = React.useRef(scannedCups);
+  scannedCupsRef.current = scannedCups;
+
+  // ローカルストレージから初期状態を復元
+  useEffect(() => {
+    try {
+      const pRaw = localStorage.getItem('printedCups');
+      if (pRaw) setPrintedCups(JSON.parse(pRaw));
+      const sRaw = localStorage.getItem('scannedCups');
+      if (sRaw) setScannedCups(JSON.parse(sRaw));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
   const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
@@ -100,36 +121,61 @@ export default function KitchenMonitor() {
     window.location.replace(passprntUrl);
   };
 
-  // 単一カップのラベルをPassPRNTで印刷（個別カット）
-  const handlePrintSingleCup = async (order: Order, targetCupNumber: number) => {
-    const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
-
-    // targetCupNumber (1-based) がどの商品・何個目かを特定
-    let current = 0;
-    let targetItem: Order['items'][0] | null = null;
-    let targetItemIndex = 0;
-    let cupIndexInItem = 0;
+  // 注文内の各カップの詳細情報をフラットな配列として生成
+  const getOrderCups = (order: Order) => {
+    const cups: {
+      cupNumber: number;
+      itemIndex: number;
+      cupIndexInItem: number;
+      cupId: string;
+      name: string;
+      options: string;
+    }[] = [];
+    let cupNumber = 1;
 
     for (let itemIdx = 0; itemIdx < order.items.length; itemIdx++) {
       const item = order.items[itemIdx];
-      for (let i = 0; i < item.quantity; i++) {
-        current++;
-        if (current === targetCupNumber) {
-          targetItem = item;
-          targetItemIndex = itemIdx;
-          cupIndexInItem = i;
-          break;
-        }
+      const nameParts = item.name.split(' (');
+      const baseName = nameParts[0];
+      const opts = nameParts.length > 1 ? '(' + nameParts[1] : '';
+
+      for (let c = 0; c < item.quantity; c++) {
+        cups.push({
+          cupNumber,
+          itemIndex: itemIdx,
+          cupIndexInItem: c,
+          cupId: `${itemIdx}-${c}`,
+          name: baseName,
+          options: opts,
+        });
+        cupNumber++;
       }
-      if (targetItem) break;
     }
 
-    if (!targetItem) return;
+    return cups;
+  };
 
-    const nameParts = targetItem.name.split(' (');
-    const baseName = nameParts[0];
-    const opts = nameParts.length > 1 ? '(' + nameParts[1] : '';
-    const qrData = `QRKENOCHA-${order.id}-${targetItemIndex}-${cupIndexInItem}`;
+  // 単一カップのラベルをPassPRNTで印刷（個別カット）
+  const handlePrintSingleCup = async (order: Order, targetCupNumber: number) => {
+    const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+    const cups = getOrderCups(order);
+    const targetCup = cups.find((c) => c.cupNumber === targetCupNumber);
+    if (!targetCup) return;
+
+    // 印刷済みとして記録（ローカルストレージとステートを更新）
+    setPrintedCups((prev) => {
+      const currentList = prev[order.id] || [];
+      if (!currentList.includes(targetCupNumber)) {
+        const next = { ...prev, [order.id]: [...currentList, targetCupNumber] };
+        try {
+          localStorage.setItem('printedCups', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      }
+      return prev;
+    });
+
+    const qrData = `QRKENOCHA-${order.id}-${targetCup.itemIndex}-${targetCup.cupIndexInItem}`;
 
     try {
       const qrDataUrl = await QRCode.toDataURL(qrData, { margin: 0, width: 300 });
@@ -156,8 +202,8 @@ export default function KitchenMonitor() {
           <div class="label">
             <div class="left-col">
               <div class="title">#${order.orderNumber}<span class="cup-info">${totalCups > 1 ? `${totalCups}杯 (${targetCupNumber}/${totalCups})` : `${totalCups}杯`}</span></div>
-              <div class="subtitle">${baseName}</div>
-              <div class="options">${opts}</div>
+              <div class="subtitle">${targetCup.name}</div>
+              <div class="options">${targetCup.options}</div>
             </div>
             <div class="right-col">
               <img src="${qrDataUrl}" />
@@ -173,6 +219,47 @@ export default function KitchenMonitor() {
     }
   };
 
+  // 画面タップで個別のカップを完成／未完成に手動切替
+  const handleToggleCupCompleted = (order: Order, cupId: string) => {
+    const currentList = scannedCups[order.id] || [];
+    const isAlreadyCompleted = currentList.includes(cupId);
+
+    let nextList: string[];
+    if (isAlreadyCompleted) {
+      nextList = currentList.filter((id) => id !== cupId);
+    } else {
+      nextList = [...currentList, cupId];
+    }
+
+    const updatedScanned = { ...scannedCups, [order.id]: nextList };
+    setScannedCups(updatedScanned);
+    try {
+      localStorage.setItem('scannedCups', JSON.stringify(updatedScanned));
+    } catch (e) {}
+
+    const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+    // 全てのカップが完成したら自動的に「受け渡し可能」へ遷移
+    if (!isAlreadyCompleted && nextList.length >= totalCups) {
+      handleStatusChange(order.id, 'completed', false);
+
+      const cleanedScanned = { ...updatedScanned };
+      delete cleanedScanned[order.id];
+      setScannedCups(cleanedScanned);
+      try {
+        localStorage.setItem('scannedCups', JSON.stringify(cleanedScanned));
+      } catch (e) {}
+
+      setPrintedCups((prev) => {
+        const next = { ...prev };
+        delete next[order.id];
+        try {
+          localStorage.setItem('printedCups', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+    }
+  };
+
   // ─── スキャナー用キーストローク監視 ───
   useEffect(() => {
     let buffer = '';
@@ -184,7 +271,6 @@ export default function KitchenMonitor() {
 
       const now = Date.now();
       // 入力間隔が1000ms以上空いた場合は手入力とみなしてバッファをクリア
-      // スキャナーによっては入力間隔が少し遅い場合があるため余裕を持たせる
       if (now - lastKeyTime > 1000) {
         buffer = '';
       }
@@ -195,54 +281,77 @@ export default function KitchenMonitor() {
         if (upperBuffer.startsWith('QRKENOCHA-')) {
           handleScan(upperBuffer);
         }
-        // 万が一別のものをスキャンした場合もバッファはリセット
         buffer = '';
       } else if (e.key.length === 1) {
-        // Shiftなどの制御キー（文字数が2文字以上）を除外し、純粋な1文字の入力のみをバッファに追加
         buffer += e.key;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [orders]); // ordersが更新されるたびに再バインド
+  }, []);
 
   const handleScan = (scannedCode: string) => {
     // 形式: QRKENOCHA-{orderId}-{itemIdx}-{cupIdx}
     const parts = scannedCode.split('-');
     if (parts.length < 4) return;
-    // データベースのIDと完全一致させるため、小文字に戻しておく
     const orderId = parts[1].toLowerCase();
     const cupId = `${parts[2]}-${parts[3]}`;
 
-    // localStorageから既存のスキャン状況を取得
-    const scannedCupsRaw = localStorage.getItem('scannedCups');
-    const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
-
-    if (!scannedCups[orderId]) {
-      scannedCups[orderId] = [];
+    // 現在の注文を取得（大文字小文字を区別せず比較）
+    const currentOrders = ordersRef.current;
+    const order = currentOrders.find((o) => o.id.toLowerCase() === orderId);
+    if (!order) {
+      alert('該当する注文が見つかりませんでした。');
+      return;
+    }
+    if (order.status !== 'preparing') {
+      alert(`注文 #${order.orderNumber} は現在「調理中」ではありません。`);
+      return;
     }
 
-    if (scannedCups[orderId].includes(cupId)) {
-      alert('このラベルはすでにスキャン済みです！');
-      return; // スキャンを無視して終了
+    const currentScanned = scannedCupsRef.current;
+    const prevScannedList = currentScanned[order.id] || [];
+
+    if (prevScannedList.includes(cupId)) {
+      alert(`注文 #${order.orderNumber} のこのカップはすでに完成（スキャン）済みです！`);
+      return;
     }
 
-    scannedCups[orderId].push(cupId);
-    localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
+    const newScannedList = [...prevScannedList, cupId];
+    const updatedScannedCups = { ...currentScanned, [order.id]: newScannedList };
+    setScannedCups(updatedScannedCups);
+    try {
+      localStorage.setItem('scannedCups', JSON.stringify(updatedScannedCups));
+    } catch (e) {}
 
-    // 現在の注文を取得（大文字小文字を区別せずに比較する）
-    const order = orders.find(o => o.id.toLowerCase() === orderId);
-    if (!order) return;
-    if (order.status !== 'preparing') return; // 調理中のものだけ対象
+    // 音声効果（チロリン音）
+    try {
+      const audio = new Audio('/chime.mp3');
+      audio.play().catch(() => {});
+    } catch (e) {}
 
     const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
-    // 全てのカップがスキャンされたか判定
-    if (scannedCups[orderId].length >= totalCups) {
-      // order.id を渡す（DBの正確なIDで更新するため）
+
+    // その注文番号の全ての飲み物が完成（スキャン）になったときに一気に受け渡し可能にする
+    if (newScannedList.length >= totalCups) {
       handleStatusChange(order.id, 'completed', false);
-      delete scannedCups[orderId];
-      localStorage.setItem('scannedCups', JSON.stringify(scannedCups));
+
+      const cleanedScanned = { ...updatedScannedCups };
+      delete cleanedScanned[order.id];
+      setScannedCups(cleanedScanned);
+      try {
+        localStorage.setItem('scannedCups', JSON.stringify(cleanedScanned));
+      } catch (e) {}
+
+      setPrintedCups((prev) => {
+        const next = { ...prev };
+        delete next[order.id];
+        try {
+          localStorage.setItem('printedCups', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
     }
   };
 
@@ -250,31 +359,68 @@ export default function KitchenMonitor() {
     // 1. 即座にステータスを変更
     handleStatusChange(order.id, 'preparing', false);
 
-    // 2. 1杯目を印刷
+    // 2. 1杯目を印刷（同時に printedCups に1が登録される）
     handlePrintSingleCup(order, 1);
   };
-
-
 
   const handleStatusChange = async (orderId: string, nextStatus: Order['status'], isManual = true) => {
     // 調理中から新規注文に戻す場合の確認
     if (nextStatus === 'pending' && isManual) {
       if (!confirm('この注文を「新規注文」に戻しますか？（印刷したラベルは破棄してください）')) return;
+      // 印刷・スキャン履歴をリセット
+      setScannedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+      setPrintedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
     }
 
     // 手動で受け渡し可能（completed）にする場合、未スキャンがないか確認
     if (nextStatus === 'completed' && isManual) {
-      const order = orders.find(o => o.id === orderId);
+      const order = orders.find((o) => o.id === orderId);
       if (order && order.status === 'preparing') {
         const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
-        const scannedCupsRaw = localStorage.getItem('scannedCups');
-        const scannedCups = scannedCupsRaw ? JSON.parse(scannedCupsRaw) : {};
         const scannedCount = (scannedCups[orderId] || []).length;
 
         if (scannedCount < totalCups) {
-          if (!confirm('QRコードを読み込まずに手動で変更していますがよろしいですか？')) return;
+          if (!confirm(`全${totalCups}杯中${scannedCount}杯しかスキャンされていません。\n手動で受渡可能（呼出中）にしますか？`)) return;
         }
       }
+      // クリーンアップ
+      setScannedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+      setPrintedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+    }
+
+    if (nextStatus === 'cancelled') {
+      setScannedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+      setPrintedCups((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
     }
 
     try {
@@ -296,6 +442,10 @@ export default function KitchenMonitor() {
     if (!confirm('すべてのご注文データをクリアして初期化しますか？')) return;
     try {
       await fetch('/api/orders/all', { method: 'DELETE' });
+      localStorage.removeItem('scannedCups');
+      localStorage.removeItem('printedCups');
+      setScannedCups({});
+      setPrintedCups({});
       await fetchOrders();
     } catch (err) {
       console.error('クリアに失敗しました', err);
@@ -669,29 +819,128 @@ export default function KitchenMonitor() {
                       </button>
                     </div>
 
-                    <div className={styles.itemDetails}>
-                      {order.items.map((item, idx) => (
-                        <div key={idx} className={styles.drinkItem}>
-                          <span className={styles.drinkName}>
-                            {item.name.split(' (')[0]}
-                            <span className={styles.drinkQty}> × {item.quantity}</span>
-                          </span>
-                          <span className={styles.drinkOpts}>
-                            {item.name.includes('(')
-                              ? item.name.substring(item.name.indexOf('(') + 1, item.name.length - 1)
-                              : ''}
-                          </span>
+                    {/* ドリンク別完成状況 (QRスキャン/タップ) */}
+                    {(() => {
+                      const totalCups = getTotalCups(order);
+                      const cups = getOrderCups(order);
+                      const scannedList = scannedCups[order.id] || [];
+
+                      return (
+                        <div style={{
+                          margin: '10px 0 6px 0',
+                          padding: '10px',
+                          backgroundColor: '#f8fafc',
+                          borderRadius: '8px',
+                          border: '1px solid #e2e8f0',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px'
+                        }}>
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            color: '#334155'
+                          }}>
+                            <span>QR読取・完成状況:</span>
+                            <span style={{
+                              color: scannedList.length === totalCups ? '#16a34a' : '#2563eb',
+                              fontWeight: 800,
+                              fontSize: '0.8rem'
+                            }}>
+                              {scannedList.length} / {totalCups}杯
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {cups.map((cup) => {
+                              const isCompleted = scannedList.includes(cup.cupId);
+                              return (
+                                <div
+                                  key={cup.cupNumber}
+                                  onClick={() => handleToggleCupCompleted(order, cup.cupId)}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    padding: '7px 10px',
+                                    borderRadius: '6px',
+                                    backgroundColor: isCompleted ? '#ecfdf5' : '#ffffff',
+                                    border: isCompleted ? '1.5px solid #86efac' : '1px solid #cbd5e1',
+                                    cursor: 'pointer',
+                                    fontSize: '0.8rem',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                  title="タップで完成/未完成を切替可能"
+                                >
+                                  <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
+                                    <span style={{
+                                      fontWeight: 700,
+                                      color: isCompleted ? '#15803d' : '#1e293b'
+                                    }}>
+                                      {cup.name}
+                                    </span>
+                                    {cup.options && (
+                                      <span style={{
+                                        fontSize: '0.72rem',
+                                        color: isCompleted ? '#166534' : '#64748b'
+                                      }}>
+                                        {cup.options}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    {isCompleted ? (
+                                      <span style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '3px',
+                                        fontWeight: 700,
+                                        fontSize: '0.75rem',
+                                        color: '#15803d',
+                                        backgroundColor: '#dcfce7',
+                                        padding: '3px 8px',
+                                        borderRadius: '12px'
+                                      }}>
+                                        <Check size={13} strokeWidth={3} />
+                                        {cup.cupNumber}杯目（完成）
+                                      </span>
+                                    ) : (
+                                      <span style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        fontWeight: 600,
+                                        fontSize: '0.75rem',
+                                        color: '#64748b',
+                                        backgroundColor: '#f1f5f9',
+                                        padding: '3px 8px',
+                                        borderRadius: '12px'
+                                      }}>
+                                        {cup.cupNumber}杯目（未スキャン）
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })()}
 
                     {/* 個別カット印刷セクション */}
                     {(() => {
                       const totalCups = getTotalCups(order);
+                      const cups = getOrderCups(order);
+                      const printedList = printedCups[order.id] || [];
+
                       if (totalCups > 1) {
                         return (
                           <div style={{
-                            margin: '10px 0',
+                            margin: '6px 0 10px 0',
                             padding: '10px',
                             backgroundColor: '#f1f5f9',
                             borderRadius: '8px',
@@ -715,47 +964,51 @@ export default function KitchenMonitor() {
                               </span>
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                              {Array.from({ length: totalCups }, (_, i) => i + 1).map((cupNum) => (
-                                <button
-                                  key={cupNum}
-                                  onClick={() => handlePrintSingleCup(order, cupNum)}
-                                  style={{
-                                    flex: '1 1 calc(50% - 4px)',
-                                    padding: '8px 6px',
-                                    borderRadius: '6px',
-                                    fontSize: '0.8rem',
-                                    fontWeight: 700,
-                                    border: cupNum === 1 ? '1px solid #cbd5e1' : '1px solid #2563eb',
-                                    backgroundColor: cupNum === 1 ? '#ffffff' : '#2563eb',
-                                    color: cupNum === 1 ? '#475569' : '#ffffff',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '4px',
-                                    boxShadow: cupNum === 1 ? 'none' : '0 1px 2px rgba(0,0,0,0.1)'
-                                  }}
-                                >
-                                  <Printer size={12} />
-                                  {cupNum}杯目を印刷 {cupNum === 1 && '(済)'}
-                                </button>
-                              ))}
+                              {cups.map((cup) => {
+                                const isPrinted = printedList.includes(cup.cupNumber);
+                                return (
+                                  <button
+                                    key={cup.cupNumber}
+                                    onClick={() => handlePrintSingleCup(order, cup.cupNumber)}
+                                    style={{
+                                      flex: '1 1 calc(50% - 4px)',
+                                      padding: '8px 6px',
+                                      borderRadius: '6px',
+                                      fontSize: '0.8rem',
+                                      fontWeight: 700,
+                                      border: isPrinted ? '1px solid #cbd5e1' : '1px solid #2563eb',
+                                      backgroundColor: isPrinted ? '#ffffff' : '#2563eb',
+                                      color: isPrinted ? '#475569' : '#ffffff',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      gap: '4px',
+                                      boxShadow: isPrinted ? 'none' : '0 1px 2px rgba(0,0,0,0.1)'
+                                    }}
+                                  >
+                                    <Printer size={12} />
+                                    {cup.cupNumber}杯目を印刷 {isPrinted ? '(済)' : ''}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         );
                       } else {
+                        const isPrinted = printedList.includes(1);
                         return (
                           <div style={{ margin: '8px 0', display: 'flex', justifyContent: 'flex-end' }}>
                             <button
                               onClick={() => handlePrintSingleCup(order, 1)}
                               style={{
-                                padding: '4px 8px',
+                                padding: '5px 10px',
                                 borderRadius: '6px',
                                 fontSize: '0.75rem',
                                 fontWeight: 600,
                                 border: '1px solid #cbd5e1',
-                                backgroundColor: '#f8fafc',
-                                color: '#475569',
+                                backgroundColor: isPrinted ? '#ffffff' : '#eff6ff',
+                                color: isPrinted ? '#475569' : '#1d4ed8',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -763,7 +1016,7 @@ export default function KitchenMonitor() {
                               }}
                             >
                               <Printer size={12} />
-                              ラベル再印刷
+                              {isPrinted ? '1杯目を印刷 (済)' : '1杯目を印刷'}
                             </button>
                           </div>
                         );
