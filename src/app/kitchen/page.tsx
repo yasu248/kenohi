@@ -228,8 +228,8 @@ export default function KitchenMonitor() {
     
     let passprntUrl = '';
     if (isAndroid) {
-      // Android Chrome用のIntentスキーム
-      passprntUrl = `intent://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial#Intent;scheme=starpassprnt;package=com.starmicronics.passprnt;end;`;
+      // Android Chrome用のIntentスキーム (スター精密公式パッケージID: jp.star_m.passprnt)
+      passprntUrl = `intent://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial#Intent;scheme=starpassprnt;package=jp.star_m.passprnt;end;`;
     } else {
       // iOS用のスキーム
       passprntUrl = `starpassprnt://v1/print/nopreview?back=${backUrl}&html=${encodeURIComponent(htmlContent)}&size=2&cut=partial`;
