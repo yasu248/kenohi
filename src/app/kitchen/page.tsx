@@ -174,7 +174,8 @@ export default function KitchenMonitor() {
           .left-col { flex: 1; text-align: left; padding-right: 2mm; }
           /* 右カラムの中身（QR画像）を限界まで右に寄せる */
           .right-col { width: 28mm; flex-shrink: 0; display: flex; justify-content: flex-end; }
-          .title { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
+          .title { font-size: 24px; font-weight: bold; margin-bottom: 6px; display: flex; align-items: baseline; }
+          .cup-info { font-size: 18px; font-weight: bold; margin-left: 8px; color: #111; }
           .subtitle { font-size: 24px; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
           .options { font-size: 20px; font-weight: normal; margin-bottom: 0; line-height: 1.1; }
           img { width: 100%; max-width: 100%; height: auto; display: block; margin: 0 0 0 auto; }
@@ -202,7 +203,7 @@ export default function KitchenMonitor() {
           htmlContent += `
             <div class="label">
               <div class="left-col">
-                <div class="title">#${order.orderNumber}</div>
+                <div class="title">#${order.orderNumber}<span class="cup-info">${totalCups > 1 ? `${totalCups}杯 (${currentCup}/${totalCups})` : `${totalCups}杯`}</span></div>
                 <div class="subtitle">${baseName}</div>
                 <div class="options">${opts}</div>
               </div>
@@ -374,6 +375,10 @@ export default function KitchenMonitor() {
     } catch {
       return '';
     }
+  };
+
+  const getTotalCups = (order: Order) => {
+    return order.items.reduce((acc, item) => acc + item.quantity, 0);
   };
 
   // --- パスワード画面 ---
@@ -558,7 +563,10 @@ export default function KitchenMonitor() {
                 pendingOrders.map((order) => (
                   <div key={order.id} className={`${styles.orderCard} ${styles.pendingCard}`}>
                     <div className={styles.cardHeader}>
-                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderNo}>
+                        #{order.orderNumber}
+                        <span className={styles.cupBadge}>{getTotalCups(order)}杯</span>
+                      </span>
                       <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
                     </div>
 
@@ -612,7 +620,10 @@ export default function KitchenMonitor() {
                 preparingOrders.map((order) => (
                   <div key={order.id} className={`${styles.orderCard} ${styles.preparingCard}`}>
                     <div className={styles.cardHeader} style={{ position: 'relative', paddingRight: '60px' }}>
-                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderNo}>
+                        #{order.orderNumber}
+                        <span className={styles.cupBadge}>{getTotalCups(order)}杯</span>
+                      </span>
                       <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
                       <button
                         onClick={() => handleStatusChange(order.id, 'pending')}
@@ -690,7 +701,10 @@ export default function KitchenMonitor() {
                 completedOrders.map((order) => (
                   <div key={order.id} className={`${styles.orderCard} ${styles.completedCard}`}>
                     <div className={styles.cardHeader}>
-                      <span className={styles.orderNo}>#{order.orderNumber}</span>
+                      <span className={styles.orderNo}>
+                        #{order.orderNumber}
+                        <span className={styles.cupBadge}>{getTotalCups(order)}杯</span>
+                      </span>
                       <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
                     </div>
 

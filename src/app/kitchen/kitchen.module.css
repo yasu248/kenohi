@@ -150,6 +150,18 @@
   font-size: 1.25rem;
   font-weight: 900;
   color: #1e293b;
+  display: flex;
+  align-items: center;
+}
+
+.cupBadge {
+  margin-left: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #475569;
+  background-color: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 6px;
 }
 
 .orderTime {
