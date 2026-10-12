@@ -1,11 +1,57 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle, Settings, Printer } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Play, Check, Trash2, ArrowLeft, Coffee, Users, CheckSquare, Trash, Lock, BarChart, Power, PackageX, AlertCircle, Settings, Printer, Volume2 } from 'lucide-react';
 import styles from './kitchen.module.css';
 import type { Order } from '../../lib/store';
 import QRCode from 'qrcode';
 import { isStoreCurrentlyOpen } from '../../lib/businessHours';
+
+// Web Audio API による「ピロリン♪」通知音（G5 -> C6 -> E6 の澄んだベルチャイム）
+function playOrderChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass) {
+      const ctx = new AudioContextClass();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      // 明るく澄んだ「ピロリン♪」3音 (G5: 783.99Hz, C6: 1046.5Hz, E6: 1318.51Hz)
+      const notes = [
+        { time: 0.00, freq: 783.99, duration: 0.35, gain: 0.4 },
+        { time: 0.12, freq: 1046.50, duration: 0.45, gain: 0.5 },
+        { time: 0.24, freq: 1318.51, duration: 0.85, gain: 0.6 },
+      ];
+
+      notes.forEach(({ time, freq, duration, gain }) => {
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + time);
+
+        gainNode.gain.setValueAtTime(0.001, ctx.currentTime + time);
+        gainNode.gain.linearRampToValueAtTime(gain, ctx.currentTime + time + 0.015);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + time + duration);
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.start(ctx.currentTime + time);
+        osc.stop(ctx.currentTime + time + duration);
+      });
+      return;
+    }
+  } catch (e) {
+    console.warn('Web Audio playback failed, trying HTML5 Audio fallback:', e);
+  }
+
+  // フォールバック: HTML5 Audio要素で再生
+  try {
+    const audio = new Audio('/chime.mp3');
+    audio.play().catch((err) => console.log('音声再生エラー:', err));
+  } catch (e) {}
+}
 
 // キッチン画面へのアクセスパスワード
 // 本番環境では環境変数や認証サービスに差し替えてください
@@ -98,6 +144,27 @@ export default function KitchenMonitor() {
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
   const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
   const [pendingOpenDateStr, setPendingOpenDateStr] = useState<string | null>(null); // 開店保留中の日付
+  const prevPendingIdsRef = useRef<Set<string> | null>(null);
+
+  // 画面タップ・クリック時にブラウザの音声自動再生制限を解除
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const ctx = new AudioContextClass();
+          ctx.resume().catch(() => {});
+        }
+      } catch (e) {}
+    };
+
+    window.addEventListener('click', unlockAudio, { once: true });
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
 
   // 注文データと店舗状態をAPIから取得
   const fetchOrders = useCallback(async (isInitial = false) => {
@@ -106,20 +173,19 @@ export default function KitchenMonitor() {
       if (!res.ok) throw new Error('fetch error');
       const data: Order[] = await res.json();
 
-      if (!isInitial) {
-        setOrders((prevOrders) => {
-          const prevPendingIds = new Set(prevOrders.filter((o) => o.status === 'pending').map((o) => o.id));
-          const hasNewPending = data.some((o) => o.status === 'pending' && !prevPendingIds.has(o.id));
+      const currentPendingOrders = data.filter((o) => o.status === 'pending');
+      const currentPendingIds = new Set(currentPendingOrders.map((o) => o.id));
 
-          if (hasNewPending) {
-            const audio = new Audio('/chime.mp3');
-            audio.play().catch((err) => console.log('音声再生エラー:', err));
-          }
-          return data;
-        });
-      } else {
-        setOrders(data);
+      if (!isInitial && prevPendingIdsRef.current !== null) {
+        // 前回のリストにいなかった新規受付待ち（pending）注文を検知してピロリン通知音を鳴らす
+        const hasNewPending = currentPendingOrders.some((o) => !prevPendingIdsRef.current!.has(o.id));
+        if (hasNewPending) {
+          playOrderChime();
+        }
       }
+
+      prevPendingIdsRef.current = currentPendingIds;
+      setOrders(data);
       setLastUpdated(new Date());
 
       // 店舗状態の取得
@@ -730,6 +796,15 @@ export default function KitchenMonitor() {
                 </button>
               );
             })()}
+            <button
+              className={styles.navLink}
+              onClick={playOrderChime}
+              title="通知音（ピロリン♪）をテスト"
+              style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+            >
+              <Volume2 size={16} />
+              音テスト
+            </button>
             <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="欠品管理">
               <PackageX size={16} />
               欠品管理
