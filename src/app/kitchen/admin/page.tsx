@@ -1,8 +1,52 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Settings, Clock, Trash2, RefreshCw, PackageX, Package } from 'lucide-react';
+import { ArrowLeft, Settings, Clock, Trash2, RefreshCw, PackageX, Package, Volume2 } from 'lucide-react';
 import styles from './admin.module.css';
+
+// Web Audio API による「ピロリン♪」通知音（G5 -> C6 -> E6 の澄んだベルチャイム）
+function playOrderChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass) {
+      const ctx = new AudioContextClass();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+
+      const notes = [
+        { time: 0.00, freq: 783.99, duration: 0.35, gain: 0.4 },
+        { time: 0.12, freq: 1046.50, duration: 0.45, gain: 0.5 },
+        { time: 0.24, freq: 1318.51, duration: 0.85, gain: 0.6 },
+      ];
+
+      notes.forEach(({ time, freq, duration, gain }) => {
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + time);
+
+        gainNode.gain.setValueAtTime(0.001, ctx.currentTime + time);
+        gainNode.gain.linearRampToValueAtTime(gain, ctx.currentTime + time + 0.015);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + time + duration);
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.start(ctx.currentTime + time);
+        osc.stop(ctx.currentTime + time + duration);
+      });
+      return;
+    }
+  } catch (e) {
+    console.warn('Web Audio playback failed, trying HTML5 Audio fallback:', e);
+  }
+
+  try {
+    const audio = new Audio('/chime.mp3');
+    audio.play().catch((err) => console.log('音声再生エラー:', err));
+  } catch (e) {}
+}
 
 // メニューIDから商品名へのマッピング（sold-out/page.tsxと同期）
 const MENU_NAME: Record<string, string> = {
@@ -82,6 +126,45 @@ export default function AdminPage() {
       </header>
 
       <div className={styles.content}>
+
+        {/* ─── 通知音テスト ─── */}
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <Volume2 size={18} className={styles.sectionIcon} />
+            <h2 className={styles.sectionTitle}>通知音テスト</h2>
+          </div>
+          <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+            <div>
+              <p style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#1e293b' }}>
+                新規注文通知チャイム（ピロリン♪）
+              </p>
+              <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                端末のスピーカーから正しく音が鳴るか確認できます。
+              </p>
+            </div>
+            <button
+              onClick={playOrderChime}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 18px',
+                borderRadius: '8px',
+                backgroundColor: '#2563eb',
+                color: '#ffffff',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '0.9rem',
+                cursor: 'pointer',
+                boxShadow: '0 2px 4px rgba(37, 99, 235, 0.25)',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Volume2 size={18} />
+              音テスト（再生）
+            </button>
+          </div>
+        </section>
 
         {/* ─── 開店時間の履歴 ─── */}
         <section className={styles.section}>

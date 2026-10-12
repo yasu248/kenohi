@@ -796,15 +796,6 @@ export default function KitchenMonitor() {
                 </button>
               );
             })()}
-            <button
-              className={styles.navLink}
-              onClick={playOrderChime}
-              title="通知音（ピロリン♪）をテスト"
-              style={{ backgroundColor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
-            >
-              <Volume2 size={16} />
-              音テスト
-            </button>
             <button className={styles.navLink} onClick={() => window.location.href = '/kitchen/sold-out'} title="欠品管理">
               <PackageX size={16} />
               欠品管理
