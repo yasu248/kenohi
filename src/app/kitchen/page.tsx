@@ -27,16 +27,72 @@ export default function KitchenMonitor() {
   scannedCupsRef.current = scannedCups;
 
   // ローカルストレージから初期状態を復元
+  // ローカルストレージから初期状態を復元（マウント時およびPassPRNTから戻った時）
   useEffect(() => {
-    try {
-      const pRaw = localStorage.getItem('printedCups');
-      if (pRaw) setPrintedCups(JSON.parse(pRaw));
-      const sRaw = localStorage.getItem('scannedCups');
-      if (sRaw) setScannedCups(JSON.parse(sRaw));
-    } catch (e) {
-      console.error(e);
-    }
+    const syncFromStorage = () => {
+      try {
+        const pRaw = localStorage.getItem('printedCups');
+        if (pRaw) setPrintedCups(JSON.parse(pRaw));
+        const sRaw = localStorage.getItem('scannedCups');
+        if (sRaw) setScannedCups(JSON.parse(sRaw));
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    syncFromStorage();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncFromStorage();
+      }
+    };
+
+    window.addEventListener('focus', syncFromStorage);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', syncFromStorage);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
+
+  // 注文リスト更新時に、現在調理中ではない注文の古いスキャン情報・印刷情報を自動クリーンアップ
+  useEffect(() => {
+    if (orders.length === 0) return;
+    const preparingIds = new Set(orders.filter((o) => o.status === 'preparing').map((o) => o.id));
+
+    setScannedCups((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of Object.keys(next)) {
+        if (!preparingIds.has(id)) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      }
+      return prev;
+    });
+
+    setPrintedCups((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of Object.keys(next)) {
+        if (!preparingIds.has(id)) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch (e) {}
+        return next;
+      }
+      return prev;
+    });
+  }, [orders]);
 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
@@ -162,18 +218,20 @@ export default function KitchenMonitor() {
     const targetCup = cups.find((c) => c.cupNumber === targetCupNumber);
     if (!targetCup) return;
 
-    // 印刷済みとして記録（ローカルストレージとステートを更新）
-    setPrintedCups((prev) => {
-      const currentList = prev[order.id] || [];
+    // 印刷済みとして同期的に即時記録（PassPRNTへの画面遷移前に確実に保存）
+    try {
+      const pRaw = localStorage.getItem('printedCups');
+      const stored: Record<string, number[]> = pRaw ? JSON.parse(pRaw) : {};
+      const currentList = stored[order.id] || [1];
       if (!currentList.includes(targetCupNumber)) {
-        const next = { ...prev, [order.id]: [...currentList, targetCupNumber] };
-        try {
-          localStorage.setItem('printedCups', JSON.stringify(next));
-        } catch (e) {}
-        return next;
+        currentList.push(targetCupNumber);
       }
-      return prev;
-    });
+      stored[order.id] = currentList;
+      localStorage.setItem('printedCups', JSON.stringify(stored));
+      setPrintedCups({ ...stored });
+    } catch (e) {
+      console.error('printedCups保存エラー:', e);
+    }
 
     const qrData = `QRKENOCHA-${order.id}-${targetCup.itemIndex}-${targetCup.cupIndexInItem}`;
 
@@ -356,10 +414,27 @@ export default function KitchenMonitor() {
   };
 
   const handleStartPreparing = async (order: Order) => {
+    // 印刷・スキャン履歴を確実に同期初期化（1杯目は印刷済み、スキャンは0件からスタート）
+    try {
+      const pRaw = localStorage.getItem('printedCups');
+      const pStored = pRaw ? JSON.parse(pRaw) : {};
+      pStored[order.id] = [1];
+      localStorage.setItem('printedCups', JSON.stringify(pStored));
+      setPrintedCups({ ...pStored });
+
+      const sRaw = localStorage.getItem('scannedCups');
+      const sStored = sRaw ? JSON.parse(sRaw) : {};
+      delete sStored[order.id];
+      localStorage.setItem('scannedCups', JSON.stringify(sStored));
+      setScannedCups({ ...sStored });
+    } catch (e) {
+      console.error('handleStartPreparing同期初期化エラー:', e);
+    }
+
     // 1. 即座にステータスを変更
     handleStatusChange(order.id, 'preparing', false);
 
-    // 2. 1杯目を印刷（同時に printedCups に1が登録される）
+    // 2. 1杯目を印刷
     handlePrintSingleCup(order, 1);
   };
 
@@ -965,7 +1040,9 @@ export default function KitchenMonitor() {
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                               {cups.map((cup) => {
-                                const isPrinted = printedList.includes(cup.cupNumber);
+                                const isPrinted =
+                                  cup.cupNumber === 1 ||
+                                  (printedList && printedList.some((n) => Number(n) === Number(cup.cupNumber)));
                                 return (
                                   <button
                                     key={cup.cupNumber}
@@ -977,17 +1054,18 @@ export default function KitchenMonitor() {
                                       fontSize: '0.8rem',
                                       fontWeight: 700,
                                       border: isPrinted ? '1px solid #cbd5e1' : '1px solid #2563eb',
-                                      backgroundColor: isPrinted ? '#ffffff' : '#2563eb',
+                                      backgroundColor: isPrinted ? '#f8fafc' : '#2563eb',
                                       color: isPrinted ? '#475569' : '#ffffff',
                                       cursor: 'pointer',
                                       display: 'flex',
                                       alignItems: 'center',
                                       justifyContent: 'center',
                                       gap: '4px',
-                                      boxShadow: isPrinted ? 'none' : '0 1px 2px rgba(0,0,0,0.1)'
+                                      boxShadow: isPrinted ? 'none' : '0 2px 4px rgba(37, 99, 235, 0.25)',
+                                      transition: 'all 0.15s ease'
                                     }}
                                   >
-                                    <Printer size={12} />
+                                    {isPrinted ? <Check size={13} strokeWidth={2.5} /> : <Printer size={12} />}
                                     {cup.cupNumber}杯目を印刷 {isPrinted ? '(済)' : ''}
                                   </button>
                                 );
@@ -996,7 +1074,6 @@ export default function KitchenMonitor() {
                           </div>
                         );
                       } else {
-                        const isPrinted = printedList.includes(1);
                         return (
                           <div style={{ margin: '8px 0', display: 'flex', justifyContent: 'flex-end' }}>
                             <button
@@ -1007,8 +1084,8 @@ export default function KitchenMonitor() {
                                 fontSize: '0.75rem',
                                 fontWeight: 600,
                                 border: '1px solid #cbd5e1',
-                                backgroundColor: isPrinted ? '#ffffff' : '#eff6ff',
-                                color: isPrinted ? '#475569' : '#1d4ed8',
+                                backgroundColor: '#f8fafc',
+                                color: '#475569',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -1016,7 +1093,7 @@ export default function KitchenMonitor() {
                               }}
                             >
                               <Printer size={12} />
-                              {isPrinted ? '1杯目を印刷 (済)' : '1杯目を印刷'}
+                              ラベル再印刷 (1杯目済)
                             </button>
                           </div>
                         );
