@@ -523,6 +523,29 @@ export default function KitchenMonitor() {
       });
     }
 
+    // 受渡可能から調理中に戻す場合の確認と状態復元
+    if (nextStatus === 'preparing' && isManual) {
+      if (!confirm('この注文を「調理中」に戻しますか？')) return;
+      const order = orders.find((o) => o.id === orderId);
+      if (order) {
+        const totalCups = order.items.reduce((acc, item) => acc + item.quantity, 0);
+        const allCupNums = Array.from({ length: totalCups }, (_, i) => i + 1);
+        // ラベルはすでに印刷済みなので印刷済フラグを保持（再印刷も可能）
+        setPrintedCups((prev) => {
+          const next = { ...prev, [orderId]: allCupNums };
+          try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+        // スキャン状況はリセットして再度確認・スキャンできるようにする
+        setScannedCups((prev) => {
+          const next = { ...prev };
+          delete next[orderId];
+          try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+      }
+    }
+
     // 手動で受け渡し可能（completed）にする場合、未スキャンがないか確認
     if (nextStatus === 'completed' && isManual) {
       const order = orders.find((o) => o.id === orderId);
@@ -1200,12 +1223,35 @@ export default function KitchenMonitor() {
               ) : (
                 completedOrders.map((order) => (
                   <div key={order.id} className={`${styles.orderCard} ${styles.completedCard}`}>
-                    <div className={styles.cardHeader}>
+                    <div className={styles.cardHeader} style={{ position: 'relative', paddingRight: '60px' }}>
                       <span className={styles.orderNo}>
                         #{order.orderNumber}
                         <span className={styles.cupBadge}>{getTotalCups(order)}杯</span>
                       </span>
                       <span className={styles.orderTime}>{formatTime(order.createdAt)}</span>
+                      <button
+                        onClick={() => handleStatusChange(order.id, 'preparing')}
+                        style={{
+                          position: 'absolute',
+                          top: '-4px',
+                          right: '-4px',
+                          background: 'none',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '4px',
+                          color: '#64748b',
+                          cursor: 'pointer',
+                          padding: '4px 6px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          fontSize: '0.7rem',
+                          gap: '2px',
+                          backgroundColor: '#f8fafc'
+                        }}
+                        title="調理中に戻す"
+                      >
+                        <ArrowLeft size={10} />
+                        戻す
+                      </button>
                     </div>
 
                     <div className={styles.itemDetails}>
