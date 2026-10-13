@@ -179,14 +179,14 @@ export default function HistoryPage() {
       const uniqueCustomers = new Set(dayData.orders.map((o) => o.customerName || 'ゲスト'));
       dayData.customerCount = uniqueCustomers.size;
 
-      // 注文番号（昇順）または時間（昇順）で並び替え
+      // 注文番号（降順）または時間（降順）で並び替え（新しいもの・注文番号が大きいものを上に）
       dayData.orders.sort((a, b) => {
         const numA = parseInt(a.orderNumber, 10);
         const numB = parseInt(b.orderNumber, 10);
         if (!isNaN(numA) && !isNaN(numB)) {
-          return numA - numB;
+          return numB - numA;
         }
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
     });
 
