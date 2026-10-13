@@ -144,7 +144,7 @@ export default function KitchenMonitor() {
   const [storeState, setStoreState] = useState<{ isManualOpen: boolean, date: string, openedAt?: number } | null>(null);
   const [showSoldOutModal, setShowSoldOutModal] = useState(false); // 欠品確認モーダル
   const [pendingOpenDateStr, setPendingOpenDateStr] = useState<string | null>(null); // 開店保留中の日付
-  const prevPendingIdsRef = useRef<Set<string> | null>(null);
+  const knownOrderIdsRef = useRef<Set<string> | null>(null);
 
   // 画面タップ・クリック時にブラウザの音声自動再生制限を解除
   useEffect(() => {
@@ -173,18 +173,20 @@ export default function KitchenMonitor() {
       if (!res.ok) throw new Error('fetch error');
       const data: Order[] = await res.json();
 
-      const currentPendingOrders = data.filter((o) => o.status === 'pending');
-      const currentPendingIds = new Set(currentPendingOrders.map((o) => o.id));
+      const allOrderIds = new Set(data.map((o) => o.id));
 
-      if (!isInitial && prevPendingIdsRef.current !== null) {
-        // 前回のリストにいなかった新規受付待ち（pending）注文を検知してピロリン通知音を鳴らす
-        const hasNewPending = currentPendingOrders.some((o) => !prevPendingIdsRef.current!.has(o.id));
-        if (hasNewPending) {
+      if (!isInitial && knownOrderIdsRef.current !== null) {
+        // お客様から新しく注文が入ったタイミング（これまで画面上に存在しなかった完全新規注文）のみ通知音を鳴らす
+        // ※調理中から新規注文に戻した注文はすでに既知の注文IDとして保持されているため鳴りません
+        const hasBrandNewPending = data.some(
+          (o) => o.status === 'pending' && !knownOrderIdsRef.current!.has(o.id)
+        );
+        if (hasBrandNewPending) {
           playOrderChime();
         }
       }
 
-      prevPendingIdsRef.current = currentPendingIds;
+      knownOrderIdsRef.current = allOrderIds;
       setOrders(data);
       setLastUpdated(new Date());
 
@@ -610,6 +612,7 @@ export default function KitchenMonitor() {
       localStorage.removeItem('printedCups');
       setScannedCups({});
       setPrintedCups({});
+      knownOrderIdsRef.current = new Set();
       await fetchOrders();
     } catch (err) {
       console.error('クリアに失敗しました', err);
