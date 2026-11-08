@@ -6,6 +6,13 @@
  *   Phase 0 マイグレーション適用後の動作モード (`migrationApplied: true`) の両方を検証可能です。
  */
 
+import {
+  getJSTDateString,
+  MAX_DAILY_ORDER_NUMBER,
+  resolveInheritedOrderNumber,
+  type LegacyStoreStateNumberSnapshot,
+} from '../../src/lib/orderNumber.ts';
+
 export interface MockOrderRow {
   id: string;
   items: Array<{
