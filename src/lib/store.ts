@@ -23,9 +23,12 @@ import type {
   PersistentSessionRecord,
   RateLimitRecord,
 } from './auth.ts';
-import type {
-  IPaymentConfirmationRepository,
-  OrderRecordForPayment,
+import {
+  DEFAULT_WEBHOOK_LOCK_TIMEOUT_MS,
+  type IPaymentConfirmationRepository,
+  type OrderRecordForPayment,
+  type PaymentRejectionCode,
+  type WebhookEventAcquisitionResult,
 } from './stripeConfirmation.ts';
 
 // サーバーサイド専用クライアント（Secret Key 使用）
@@ -306,29 +309,152 @@ export async function clearOrders(): Promise<void> {
   }
 }
 
-// ─── Phase 0-D: Stripe 決済確認リポジトリ実装 (Supabase) ──────────────────────
+// ─── Phase 0-D / 監査修正 B: Stripe 決済確認リポジトリ実装 (Supabase) ────────
+
+interface StripeWebhookEventDbRow {
+  event_id: string;
+  session_id: string;
+  order_id: string;
+  status: 'processing' | 'succeeded' | 'failed_permanent';
+  attempt_count: number;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string;
+  processed_at: string | null;
+  updated_at: string;
+}
 
 export const supabasePaymentRepository: IPaymentConfirmationRepository = {
-  async claimStripeWebhookEvent(
-    eventId: string,
-    sessionId: string,
-    orderId: string
-  ): Promise<boolean> {
-    const { error } = await supabase.from('stripe_webhook_events').insert({
+  async beginStripeWebhookEvent({
+    eventId,
+    sessionId,
+    orderId,
+    staleLockTimeoutMs = DEFAULT_WEBHOOK_LOCK_TIMEOUT_MS,
+  }): Promise<WebhookEventAcquisitionResult> {
+    const nowIso = new Date().toISOString();
+
+    // 1. 新規イベントとして processing ロックの INSERT を試行
+    const { error: insertError } = await supabase.from('stripe_webhook_events').insert({
       event_id: eventId,
       session_id: sessionId,
       order_id: orderId,
-      processed_at: new Date().toISOString(),
+      status: 'processing',
+      attempt_count: 1,
+      started_at: nowIso,
+      updated_at: nowIso,
+    });
+
+    if (!insertError) {
+      return { state: 'acquired', attemptCount: 1 };
+    }
+
+    if (insertError.code !== '23505') {
+      throw new Error(`beginStripeWebhookEvent(insert) failed: ${insertError.message}`);
+    }
+
+    // 2. 既存レコードが存在する場合は状態を確認する
+    const { data: existingData, error: fetchError } = await supabase
+      .from('stripe_webhook_events')
+      .select('*')
+      .eq('event_id', eventId)
+      .maybeSingle();
+
+    if (fetchError) {
+      throw new Error(`beginStripeWebhookEvent(fetch) failed: ${fetchError.message}`);
+    }
+
+    if (!existingData) {
+      // 直前に別プロセスのロールバック等で削除された場合は再試行可能とする
+      return { state: 'in_progress' };
+    }
+
+    const existing = existingData as StripeWebhookEventDbRow;
+
+    if (existing.status === 'succeeded') {
+      return { state: 'already_succeeded' };
+    }
+
+    if (existing.status === 'failed_permanent') {
+      return {
+        state: 'already_failed_permanent',
+        errorCode: (existing.error_code || 'AMOUNT_MISMATCH') as PaymentRejectionCode,
+        errorMessage: existing.error_message || '恒久的な検証エラーが記録されています',
+      };
+    }
+
+    // status === 'processing': ロック有効期限内であれば別リクエストが同時処理中
+    const elapsedMs = Date.now() - new Date(existing.updated_at).getTime();
+    if (elapsedMs < staleLockTimeoutMs) {
+      return { state: 'in_progress' };
+    }
+
+    // 前回の処理がタイムアウトして残留している場合は CAS (Compare-And-Swap) でロックを再取得
+    const nextAttempt = (existing.attempt_count || 1) + 1;
+    const { data: reclaimed, error: reclaimError } = await supabase
+      .from('stripe_webhook_events')
+      .update({
+        status: 'processing',
+        attempt_count: nextAttempt,
+        updated_at: nowIso,
+      })
+      .eq('event_id', eventId)
+      .eq('status', 'processing')
+      .eq('updated_at', existing.updated_at)
+      .select()
+      .maybeSingle();
+
+    if (reclaimError) {
+      throw new Error(`beginStripeWebhookEvent(reclaim) failed: ${reclaimError.message}`);
+    }
+
+    if (!reclaimed) {
+      return { state: 'in_progress' };
+    }
+
+    return { state: 'acquired', attemptCount: nextAttempt };
+  },
+
+  async releaseStripeWebhookEventOnTransientError(
+    eventId: string,
+    errorMessage: string
+  ): Promise<void> {
+    console.warn(
+      `[Webhook] Releasing processing lock for event ${eventId} due to transient error: ${errorMessage}`
+    );
+    // processing 状態のロックのみを削除し、Stripe の次回再送で確実に再試行できるようにする
+    const { error } = await supabase
+      .from('stripe_webhook_events')
+      .delete()
+      .eq('event_id', eventId)
+      .eq('status', 'processing');
+
+    if (error) {
+      throw new Error(`releaseStripeWebhookEventOnTransientError failed: ${error.message}`);
+    }
+  },
+
+  async markStripeWebhookEventPermanentFailure({
+    eventId,
+    sessionId,
+    orderId,
+    errorCode,
+    errorMessage,
+  }): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase.from('stripe_webhook_events').upsert({
+      event_id: eventId,
+      session_id: sessionId,
+      order_id: orderId,
+      status: 'failed_permanent',
+      error_code: errorCode,
+      error_message: errorMessage,
+      processed_at: nowIso,
+      updated_at: nowIso,
     });
 
     if (error) {
-      // 23505 = unique_violation (すでに処理済みの Webhook イベント)
-      if (error.code === '23505') {
-        return false;
-      }
-      throw new Error(`claimStripeWebhookEvent failed: ${error.message}`);
+      throw new Error(`markStripeWebhookEventPermanentFailure failed: ${error.message}`);
     }
-    return true;
   },
 
   async getOrderById(orderId: string): Promise<OrderRecordForPayment | null> {
@@ -359,72 +485,34 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
   async atomicConfirmOrderPayment({
     orderId,
     stripeSessionId,
+    webhookEventId,
   }): Promise<{
     updatedOrder: OrderRecordForPayment | null;
     transitionedFromUnpaid: boolean;
   }> {
-    // 1. まず status = 'unpaid' の注文に限定した条件付き UPDATE を試行する
-    //    (これにより、すでに preparing / completed になっている注文を絶対に pending に巻き戻さない)
-    const { data: transitionedData, error: transitionError } = await supabase
-      .from('orders')
-      .update({
-        status: 'pending',
-        payment_status: 'paid',
-        production_status: 'pending',
-        fulfillment_status: 'not_handed_over',
-        cancellation_status: 'active',
-        stripe_session_id: stripeSessionId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId)
-      .eq('status', 'unpaid')
-      .select()
-      .maybeSingle();
+    // PostgreSQL 側の単一トランザクション RPC (`confirm_stripe_order_payment_tx`) を呼び出し、
+    // 注文ステータスの条件付き更新と Webhook イベントの succeeded 記録を同一トランザクションで確定する
+    const { data, error } = await supabase.rpc('confirm_stripe_order_payment_tx', {
+      p_order_id: orderId,
+      p_stripe_session_id: stripeSessionId,
+      p_webhook_event_id: webhookEventId ?? null,
+    });
 
-    if (transitionError) {
-      throw new Error(`atomicConfirmOrderPayment(transition) failed: ${transitionError.message}`);
+    if (error) {
+      throw new Error(`atomicConfirmOrderPayment(rpc) failed: ${error.message}`);
     }
 
-    if (transitionedData) {
-      const row = transitionedData as OrderDbRow;
-      return {
-        updatedOrder: {
-          id: row.id,
-          orderNumber: row.order_number,
-          totalPrice: row.total_price,
-          status: row.status,
-          paymentStatus: row.payment_status,
-          productionStatus: row.production_status,
-          fulfillmentStatus: row.fulfillment_status,
-          cancellationStatus: row.cancellation_status,
-          stripeSessionId: row.stripe_session_id,
-        },
-        transitionedFromUnpaid: true,
-      };
-    }
+    const payload = data as {
+      found?: boolean;
+      transitioned_from_unpaid?: boolean;
+      order?: OrderDbRow;
+    } | null;
 
-    // 2. すでに status !== 'unpaid' (例: pending, preparing, completed) の場合は、
-    //    製造状態を一切変更せず、payment_status='paid' と stripe_session_id だけを冪等に記録する
-    const { data: existingData, error: existingError } = await supabase
-      .from('orders')
-      .update({
-        payment_status: 'paid',
-        stripe_session_id: stripeSessionId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId)
-      .select()
-      .maybeSingle();
-
-    if (existingError) {
-      throw new Error(`atomicConfirmOrderPayment(idempotent) failed: ${existingError.message}`);
-    }
-
-    if (!existingData) {
+    if (!payload || !payload.found || !payload.order) {
       return { updatedOrder: null, transitionedFromUnpaid: false };
     }
 
-    const row = existingData as OrderDbRow;
+    const row = payload.order;
     return {
       updatedOrder: {
         id: row.id,
@@ -437,7 +525,7 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
         cancellationStatus: row.cancellation_status,
         stripeSessionId: row.stripe_session_id,
       },
-      transitionedFromUnpaid: false,
+      transitionedFromUnpaid: Boolean(payload.transitioned_from_unpaid),
     };
   },
 };
