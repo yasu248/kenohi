@@ -19,6 +19,16 @@ import {
   CalendarDays
 } from 'lucide-react';
 import styles from './history.module.css';
+import {
+  calculateSalesMetrics,
+  resolveOrderDomainState,
+  type PaymentStatus,
+  type ProductionStatus,
+  type FulfillmentStatus,
+  type CancellationStatus,
+  type LegacyStatusClassification,
+  type SalesMetricsSummary,
+} from '../../../lib/orderStatus';
 
 // 注文商品の型
 interface OrderItem {
@@ -39,6 +49,12 @@ interface OrderHistory {
   items: OrderItem[];
   totalPrice: number;
   createdAt: string;
+  paymentStatus?: PaymentStatus;
+  productionStatus?: ProductionStatus;
+  fulfillmentStatus?: FulfillmentStatus;
+  cancellationStatus?: CancellationStatus;
+  legacyClassification?: LegacyStatusClassification;
+  refundedAmount?: number;
 }
 
 // 日別集計データの型
@@ -51,6 +67,7 @@ interface DayData {
   customerCount: number;
   totalRevenue: number;
   totalCups: number;
+  salesMetrics: SalesMetricsSummary;
   itemCounts: Record<string, { count: number; revenue: number }>;
   orders: OrderHistory[];
 }
@@ -110,6 +127,11 @@ export default function HistoryPage() {
     setIsLoading(true);
     try {
       const res = await fetch('/api/orders/history');
+      if (res.status === 401 || res.status === 403) {
+        alert('スタッフ認証が必要です。キッチン画面からログインしてください。');
+        router.push('/kitchen');
+        return;
+      }
       if (!res.ok) throw new Error('履歴の取得に失敗しました');
       const data: OrderHistory[] = await res.json();
       setRawOrders(data);
@@ -142,6 +164,7 @@ export default function HistoryPage() {
         customerCount: 0,
         totalRevenue: 0,
         totalCups: 0,
+        salesMetrics: calculateSalesMetrics([]),
         itemCounts: {},
         orders: [],
       });
@@ -156,27 +179,58 @@ export default function HistoryPage() {
       // 7日以内のデータのみ集計（それ以上前は対象外）
       if (map.has(dateKey)) {
         const dayData = map.get(dateKey)!;
-        dayData.orderCount += 1;
-        dayData.totalRevenue += (order.totalPrice || 0);
         dayData.orders.push(order);
 
-        (order.items || []).forEach((item) => {
-          const qty = item.quantity || 1;
-          const price = item.price || 0;
-          dayData.totalCups += qty;
-
-          if (!dayData.itemCounts[item.name]) {
-            dayData.itemCounts[item.name] = { count: 0, revenue: 0 };
-          }
-          dayData.itemCounts[item.name].count += qty;
-          dayData.itemCounts[item.name].revenue += price * qty;
+        const domain = resolveOrderDomainState({
+          status: order.status,
+          payment_status: order.paymentStatus,
+          production_status: order.productionStatus,
+          fulfillment_status: order.fulfillmentStatus,
+          cancellation_status: order.cancellationStatus,
+          refunded_amount: order.refundedAmount,
         });
+
+        // 本当のキャンセルおよび全額返金は商品別販売杯数・売上集計から除外する
+        const isExcludedFromSales =
+          domain.cancellationStatus === 'cancelled' ||
+          domain.paymentStatus === 'refunded' ||
+          domain.paymentStatus === 'unpaid' ||
+          domain.paymentStatus === 'failed';
+
+        if (!isExcludedFromSales) {
+          dayData.orderCount += 1;
+          (order.items || []).forEach((item) => {
+            const qty = item.quantity || 1;
+            const price = item.price || 0;
+            dayData.totalCups += qty;
+
+            if (!dayData.itemCounts[item.name]) {
+              dayData.itemCounts[item.name] = { count: 0, revenue: 0 };
+            }
+            dayData.itemCounts[item.name].count += qty;
+            dayData.itemCounts[item.name].revenue += price * qty;
+          });
+        }
       }
     });
 
-    // 各日の客数（ユニーク名）と注文ソート（昇順）
+    // 各日の売上メトリクス・客数（ユニーク名）と注文ソート（降順）
     map.forEach((dayData) => {
-      const uniqueCustomers = new Set(dayData.orders.map((o) => o.customerName || 'ゲスト'));
+      dayData.salesMetrics = calculateSalesMetrics(dayData.orders);
+      // 既存互換表示（過去データの未判定分を含みつつ、新しいキャンセル・返金は除外した金額）
+      dayData.totalRevenue = dayData.salesMetrics.legacyCompatibleRevenue;
+
+      const validOrders = dayData.orders.filter((o) => {
+        const domain = resolveOrderDomainState({
+          status: o.status,
+          payment_status: o.paymentStatus,
+          production_status: o.productionStatus,
+          fulfillment_status: o.fulfillmentStatus,
+          cancellation_status: o.cancellationStatus,
+        });
+        return domain.cancellationStatus !== 'cancelled' && domain.paymentStatus !== 'refunded';
+      });
+      const uniqueCustomers = new Set(validOrders.map((o) => o.customerName || 'ゲスト'));
       dayData.customerCount = uniqueCustomers.size;
 
       // 注文番号（降順）または時間（降順）で並び替え（新しいもの・注文番号が大きいものを上に）
@@ -203,6 +257,7 @@ export default function HistoryPage() {
     customerCount: 0,
     totalRevenue: 0,
     totalCups: 0,
+    salesMetrics: calculateSalesMetrics([]),
     itemCounts: {},
     orders: [],
   };
@@ -220,8 +275,54 @@ export default function HistoryPage() {
     }
   };
 
-  const getStatusBadge = (status: OrderHistory['status']) => {
-    switch (status) {
+  const getStatusBadge = (order: OrderHistory) => {
+    const domain = resolveOrderDomainState({
+      status: order.status,
+      payment_status: order.paymentStatus,
+      production_status: order.productionStatus,
+      fulfillment_status: order.fulfillmentStatus,
+      cancellation_status: order.cancellationStatus,
+    });
+
+    if (domain.cancellationStatus === 'cancelled') {
+      return (
+        <span
+          className={styles.orderStatusBadge}
+          style={{ backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca' }}
+        >
+          注文取消 (売上除外)
+        </span>
+      );
+    }
+
+    if (domain.paymentStatus === 'refunded') {
+      return (
+        <span
+          className={styles.orderStatusBadge}
+          style={{ backgroundColor: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}
+        >
+          全額返金
+        </span>
+      );
+    }
+
+    if (domain.legacyClassification === 'legacy_undetermined') {
+      return (
+        <span className={`${styles.orderStatusBadge} ${styles.statusHandedOver}`} title="旧形式データ（受渡完了または取消未判定）">
+          <CheckCheck size={12} /> 完了 (旧形式)
+        </span>
+      );
+    }
+
+    if (domain.fulfillmentStatus === 'handed_over') {
+      return (
+        <span className={`${styles.orderStatusBadge} ${styles.statusHandedOver}`}>
+          <CheckCheck size={12} /> 受渡完了
+        </span>
+      );
+    }
+
+    switch (order.status) {
       case 'pending':
         return (
           <span className={`${styles.orderStatusBadge} ${styles.statusPending}`}>
@@ -359,10 +460,19 @@ export default function HistoryPage() {
                 </div>
 
                 <div className={`${styles.metricCard} ${styles.metricRevenue}`}>
-                  <span className={styles.metricLabel}>売上合計</span>
+                  <span className={styles.metricLabel}>売上合計 (互換合計)</span>
                   <span className={`${styles.metricValue} ${styles.revenueText}`}>
                     <DollarSign size={16} style={{ display: 'inline', marginRight: 1, color: '#059669' }} />
                     ¥{selectedDayData.totalRevenue.toLocaleString()}
+                  </span>
+                  <span style={{ fontSize: '0.7rem', color: '#475569', marginTop: '4px', display: 'block' }}>
+                    確定純売上: ¥{selectedDayData.salesMetrics.confirmedNetRevenue.toLocaleString()}
+                    {selectedDayData.salesMetrics.legacyUndeterminedCount > 0 &&
+                      ` / 旧形式(未判定): ¥${selectedDayData.salesMetrics.legacyUndeterminedAmount.toLocaleString()}`}
+                    {selectedDayData.salesMetrics.cancelledOrderCount > 0 &&
+                      ` / 取消除外: ${selectedDayData.salesMetrics.cancelledOrderCount}件`}
+                    {selectedDayData.salesMetrics.totalRefundedAmount > 0 &&
+                      ` / 返金控除: -¥${selectedDayData.salesMetrics.totalRefundedAmount.toLocaleString()}`}
                   </span>
                 </div>
               </div>
@@ -410,7 +520,7 @@ export default function HistoryPage() {
                             <span className={styles.orderNoBadge}>
                               #{order.orderNumber || '----'}
                             </span>
-                            {getStatusBadge(order.status)}
+                            {getStatusBadge(order)}
                           </div>
                           <span className={styles.orderTime}>
                             <Clock size={13} style={{ marginRight: 4, verticalAlign: 'middle' }} />

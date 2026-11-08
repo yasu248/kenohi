@@ -236,11 +236,11 @@ export default function Home() {
     }
   }, []);
 
-  // 呼び出し中の注文を取得（5秒ごと）
+  // 呼び出し中の注文を取得（5秒ごと・個人情報を含まない公開APIを使用）
   useEffect(() => {
     const fetchOrders = async () => {
       try {
-        const res = await fetch('/api/orders');
+        const res = await fetch('/api/orders/public');
         if (!res.ok) return;
         const all = await res.json();
 

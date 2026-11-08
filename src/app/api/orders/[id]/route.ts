@@ -1,14 +1,30 @@
 import { type NextRequest } from 'next/server';
-import { updateOrderStatus, clearOrders } from '../../../../lib/store';
+import {
+  updateOrderStatus,
+  clearOrders,
+  supabaseAuthPersistenceStore,
+} from '../../../../lib/store';
+import { authorizeStaffRequest } from '../../../../lib/auth';
+import type { OrderStatusAction } from '../../../../lib/orderStatus';
 
-// PATCH /api/orders/[id] — ステータスを更新する（キッチン画面が使う）
+// PATCH /api/orders/[id] — ステータスを更新する（キッチン画面専用・要スタッフ認証）
 export async function PATCH(
   request: NextRequest,
   ctx: RouteContext<'/api/orders/[id]'>
 ) {
+  const auth = await authorizeStaffRequest(request, supabaseAuthPersistenceStore, {
+    enforceCsrf: true,
+  });
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   const body = await request.json();
-  const { status } = body;
+  const { status, action } = body as {
+    status: 'pending' | 'preparing' | 'completed' | 'cancelled';
+    action?: OrderStatusAction;
+  };
 
   const validStatuses = ['pending', 'preparing', 'completed', 'cancelled'];
   if (!validStatuses.includes(status)) {
@@ -18,8 +34,23 @@ export async function PATCH(
     );
   }
 
+  const validActions: OrderStatusAction[] = [
+    'start_preparing',
+    'mark_ready',
+    'revert_to_pending',
+    'revert_to_preparing',
+    'hand_over',
+    'cancel_order',
+  ];
+  if (action && !validActions.includes(action)) {
+    return Response.json(
+      { error: `無効なアクションです: ${action}` },
+      { status: 400 }
+    );
+  }
+
   try {
-    const updated = await updateOrderStatus(id, status);
+    const updated = await updateOrderStatus(id, status, action);
     if (!updated) {
       return Response.json({ error: `注文が見つかりません: ${id}` }, { status: 404 });
     }
@@ -30,11 +61,19 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/orders/all — 全注文クリア
+// DELETE /api/orders/all — 全注文クリア（管理者 admin ロール限定）
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   ctx: RouteContext<'/api/orders/[id]'>
 ) {
+  const auth = await authorizeStaffRequest(request, supabaseAuthPersistenceStore, {
+    requireRole: 'admin',
+    enforceCsrf: true,
+  });
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: auth.status });
+  }
+
   const { id } = await ctx.params;
   if (id !== 'all') {
     return Response.json({ error: 'Not found' }, { status: 404 });

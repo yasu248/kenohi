@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Volume2 } from 'lucide-react';
 import styles from './display.module.css';
-import type { Order } from '../../lib/store';
+import type { PublicOrderSummary } from '../../lib/store';
 
 // Web Audio API で「ピンポーン」というチャイム音を生成する関数
 function playChime() {
@@ -41,7 +41,7 @@ function playChime() {
 
 export default function DisplayPage() {
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
-  const [calledOrders, setCalledOrders] = useState<Order[]>([]);
+  const [calledOrders, setCalledOrders] = useState<PublicOrderSummary[]>([]);
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   
   // 前回取得時の完了注文IDリストを保持（新規判定用）
@@ -51,7 +51,7 @@ export default function DisplayPage() {
   const handleStart = () => {
     setIsAudioEnabled(true);
     // 最初のタップで無音を鳴らしてAudioContextを初期化する（iOS等での制限回避）
-    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    const AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof window.AudioContext }).webkitAudioContext;
     if (AudioContext) {
       const ctx = new AudioContext();
       ctx.resume();
@@ -63,9 +63,9 @@ export default function DisplayPage() {
 
     const fetchOrders = async () => {
       try {
-        const res = await fetch('/api/orders');
+        const res = await fetch('/api/orders/public');
         if (!res.ok) return;
-        const allOrders: Order[] = await res.json();
+        const allOrders: PublicOrderSummary[] = await res.json();
         
         // ステータスが「completed（呼び出し中）」のものだけを抽出
         const completed = allOrders.filter(o => o.status === 'completed');

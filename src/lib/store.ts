@@ -6,11 +6,32 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import {
+  resolveOrderDomainState,
+  computeNextOrderStatuses,
+  type OrderSource,
+  type PaymentStatus,
+  type ProductionStatus,
+  type FulfillmentStatus,
+  type CancellationStatus,
+  type LegacyStatusClassification,
+  type OrderStatusAction,
+} from './orderStatus.ts';
+import { allocateAtomicOrderNumber } from './orderNumber.ts';
+import type {
+  IAuthPersistenceStore,
+  PersistentSessionRecord,
+  RateLimitRecord,
+} from './auth.ts';
+import type {
+  IPaymentConfirmationRepository,
+  OrderRecordForPayment,
+} from './stripeConfirmation.ts';
 
 // サーバーサイド専用クライアント（Secret Key 使用）
 const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SECRET_KEY!
+  process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
+  process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key'
 );
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
@@ -19,6 +40,8 @@ export interface OrderItem {
   name: string;
   price: number;
   quantity: number;
+  sweetness?: string;
+  ice?: string;
 }
 
 export interface Order {
@@ -30,11 +53,50 @@ export interface Order {
   status: 'unpaid' | 'pending' | 'preparing' | 'completed' | 'cancelled';
   createdAt: string;
   orderNumber: string;
+  // Phase 0 拡張フィールド（4軸ステータス・外部連携準備・返金管理）
+  storeId?: string;
+  source?: OrderSource;
+  externalOrderId?: string;
+  paymentStatus?: PaymentStatus;
+  productionStatus?: ProductionStatus;
+  fulfillmentStatus?: FulfillmentStatus;
+  cancellationStatus?: CancellationStatus;
+  legacyClassification?: LegacyStatusClassification;
+  refundedAmount?: number;
+  stripeSessionId?: string;
+}
+
+/** 顧客向け公開注文情報（個人情報を一切含まない） */
+export interface PublicOrderSummary {
+  id: string;
+  orderNumber: string;
+  status: 'pending' | 'preparing' | 'completed';
+  createdAt: string;
+}
+
+interface OrderDbRow {
+  id: string;
+  items: OrderItem[];
+  total_price: number;
+  customer_name: string;
+  customer_avatar: string | null;
+  status: 'unpaid' | 'pending' | 'preparing' | 'completed' | 'cancelled';
+  created_at: string;
+  order_number: string;
+  store_id?: string | null;
+  source?: string | null;
+  external_order_id?: string | null;
+  payment_status?: string | null;
+  production_status?: string | null;
+  fulfillment_status?: string | null;
+  cancellation_status?: string | null;
+  refunded_amount?: number | null;
+  stripe_session_id?: string | null;
 }
 
 // DB（snake_case）→ アプリ（camelCase）変換
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toOrder(row: any): Order {
+export function toOrder(row: OrderDbRow): Order {
+  const domain = resolveOrderDomainState(row);
   return {
     id: row.id,
     items: row.items,
@@ -44,112 +106,92 @@ function toOrder(row: any): Order {
     status: row.status,
     createdAt: row.created_at,
     orderNumber: row.order_number,
+    storeId: row.store_id ?? 'kenocha_main',
+    source: domain.source,
+    externalOrderId: domain.externalOrderId,
+    paymentStatus: domain.paymentStatus,
+    productionStatus: domain.productionStatus,
+    fulfillmentStatus: domain.fulfillmentStatus,
+    cancellationStatus: domain.cancellationStatus,
+    legacyClassification: domain.legacyClassification,
+    refundedAmount: domain.refundedAmount,
+    stripeSessionId: row.stripe_session_id ?? undefined,
   };
 }
 
-function getJSTDateString(date: Date = new Date()): string {
-  const jstString = date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
-  const jstDate = new Date(jstString);
-  const year = jstDate.getFullYear();
-  const month = String(jstDate.getMonth() + 1).padStart(2, '0');
-  const day = String(jstDate.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function getRandomStartOrderNumber(): number {
-  const min = 3000;
-  const max = 5000;
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-async function generateNextOrderNumber(): Promise<string> {
-  const todayStr = getJSTDateString();
-  const startOfDay = new Date(`${todayStr}T00:00:00+09:00`).toISOString();
-  const endOfDay = new Date(`${todayStr}T23:59:59.999+09:00`).toISOString();
-
-  // 1. 店舗の最新保存状態を取得
-  const state = await getStoreState();
-
-  // 2. 本日の既存注文を取得
-  const { data: todayOrders } = await supabase
-    .from('orders')
-    .select('order_number, created_at')
-    .neq('id', STORE_STATE_ID)
-    .gte('created_at', startOfDay)
-    .lte('created_at', endOfDay)
-    .order('created_at', { ascending: false });
-
-  let nextOrderNumber: number;
-
-  // 本日すでに注文が発行されている場合は前回の番号から+1（昇順）
-  if (
-    state &&
-    state.currentOrderDate === todayStr &&
-    typeof state.lastOrderNumber === 'number' &&
-    state.lastOrderNumber >= 3000
-  ) {
-    let maxNum = state.lastOrderNumber;
-    if (todayOrders && todayOrders.length > 0) {
-      for (const order of todayOrders) {
-        const num = parseInt(order.order_number, 10);
-        if (!isNaN(num) && num >= maxNum && num <= maxNum + 20) {
-          maxNum = Math.max(maxNum, num);
-        }
-      }
-    }
-    nextOrderNumber = maxNum + 1;
-  } else {
-    // その日の最初の注文番号: 3000〜5000 のランダムな整数
-    nextOrderNumber = getRandomStartOrderNumber();
-  }
-
-  // StoreState を更新して次回以降に備える
-  const updatedState: StoreState = {
-    isManualOpen: state?.isManualOpen ?? false,
-    date: state?.date ?? todayStr,
-    openedAt: state?.openedAt,
-    soldOutItems: state?.soldOutItems ?? [],
-    openHistory: state?.openHistory ?? [],
-    currentOrderDate: todayStr,
-    lastOrderNumber: nextOrderNumber,
-  };
-
-  try {
-    await setStoreState(updatedState);
-  } catch (err) {
-    console.error('Failed to update StoreState with new order number:', err);
-  }
-
-  return nextOrderNumber.toString();
+/**
+ * Phase 0-E: PostgreSQL 原子的採番 RPC を使った注文番号生成
+ * ※ `STORE_STATE_001` の読み書きによる旧方式は競合と状態破壊リスクがあるため廃止し、
+ *   PostgreSQL 側の `next_order_number` RPC を呼び出します。
+ *   マイグレーション未適用時は `MigrationRequiredError` を送出して安全に停止します。
+ */
+export async function generateNextOrderNumber(storeId: string = 'kenocha_main'): Promise<string> {
+  return allocateAtomicOrderNumber({
+    storeId,
+    rpcCaller: async (fnName, args) => {
+      const { data, error } = await supabase.rpc(fnName, args);
+      return {
+        data,
+        error: error ? { code: error.code, message: error.message } : null,
+      };
+    },
+  });
 }
 
 // ─── 公開関数 ────────────────────────────────────────────────────────────────
 
-/** 全注文を取得する（キッチン画面のポーリングで使用） */
+/** 全注文を取得する（キッチン画面のポーリングで使用 — 要スタッフ認証） */
 export async function getOrders(): Promise<Order[]> {
   const { data, error } = await supabase
     .from('orders')
     .select('*')
-    .not('status', 'eq', 'cancelled')   // キャンセル済みは除外
+    .neq('id', STORE_STATE_ID)
+    .not('status', 'eq', 'cancelled')   // 受渡完了およびキャンセル済みは除外
     .not('status', 'eq', 'unpaid')      // 未決済は除外
     .order('created_at', { ascending: true });
 
   if (error) throw new Error(`getOrders: ${error.message}`);
-  return (data ?? []).map(toOrder);
+  return ((data ?? []) as OrderDbRow[])
+    .map(toOrder)
+    .filter((o) => o.cancellationStatus !== 'cancelled' && o.fulfillmentStatus !== 'handed_over');
 }
 
-/** 新規注文を登録する（お客さんが注文確定時に使用） */
+/**
+ * 顧客画面・店頭ディスプレイ用の公開注文番号一覧を取得する（個人情報を一切返さない）
+ */
+export async function getPublicActiveOrders(): Promise<PublicOrderSummary[]> {
+  const orders = await getOrders();
+  return orders
+    .filter(
+      (o): o is Order & { status: 'pending' | 'preparing' | 'completed' } =>
+        o.status === 'pending' || o.status === 'preparing' || o.status === 'completed'
+    )
+    .map((o) => ({
+      id: o.id,
+      orderNumber: o.orderNumber,
+      status: o.status,
+      createdAt: o.createdAt,
+    }));
+}
+
+/** 新規注文を登録する（お客さんが注文確定時に `/api/checkout` 経由で使用） */
 export async function addOrder(
   items: OrderItem[],
   customerName: string,
-  customerAvatar?: string
+  customerAvatar?: string,
+  options?: {
+    storeId?: string;
+    source?: OrderSource;
+    externalOrderId?: string;
+  }
 ): Promise<Order> {
   const totalPrice = items.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0
   );
 
-  const orderNumber = await generateNextOrderNumber();
+  const storeId = options?.storeId || 'kenocha_main';
+  const orderNumber = await generateNextOrderNumber(storeId);
 
   const row = {
     id: Math.random().toString(36).substring(2, 11),
@@ -157,8 +199,16 @@ export async function addOrder(
     total_price: totalPrice,
     customer_name: customerName,
     customer_avatar: customerAvatar ?? null,
-    status: 'unpaid',
+    status: 'unpaid' as const,
     order_number: orderNumber,
+    store_id: storeId,
+    source: options?.source || 'mobile',
+    external_order_id: options?.externalOrderId ?? null,
+    payment_status: 'unpaid',
+    production_status: 'pending',
+    fulfillment_status: 'not_handed_over',
+    cancellation_status: 'active',
+    refunded_amount: 0,
   };
 
   const { data, error } = await supabase
@@ -167,28 +217,77 @@ export async function addOrder(
     .select()
     .single();
 
-  if (error) throw new Error(`addOrder: ${error.message}`);
-  return toOrder(data);
+  if (error) {
+    if (error.code === '42703' || error.message.includes('column')) {
+      throw new Error(
+        `[Phase 0 Migration Required] ordersテーブルの4軸ステータスカラムが未適用です: ${error.message}`
+      );
+    }
+    throw new Error(`addOrder: ${error.message}`);
+  }
+  return toOrder(data as OrderDbRow);
 }
 
-/** 注文のステータスを更新する（キッチン画面のボタン操作） */
+/**
+ * 注文のステータスを更新する（キッチン画面のボタン操作）
+ * Phase 0-C: 受渡完了 (`hand_over`) と本当の注文取消 (`cancel_order`) を明確に区別して保存する
+ */
 export async function updateOrderStatus(
   orderId: string,
-  status: Order['status']
+  status: Order['status'],
+  actionOverride?: OrderStatusAction
 ): Promise<Order | null> {
+  const { data: currentRow, error: fetchError } = await supabase
+    .from('orders')
+    .select('*')
+    .eq('id', orderId)
+    .single();
+
+  if (fetchError) {
+    if (fetchError.code === 'PGRST116') return null;
+    throw new Error(`updateOrderStatus(fetch): ${fetchError.message}`);
+  }
+
+  const currentDomain = resolveOrderDomainState(currentRow as OrderDbRow);
+
+  let action: OrderStatusAction;
+  if (actionOverride) {
+    action = actionOverride;
+  } else if (status === 'preparing') {
+    action =
+      currentRow.status === 'completed' ? 'revert_to_preparing' : 'start_preparing';
+  } else if (status === 'completed') {
+    action = 'mark_ready';
+  } else if (status === 'pending') {
+    action = 'revert_to_pending';
+  } else {
+    // キッチン画面の既存「受渡完了 (閉じる)」ボタンは status='cancelled' を送信するため、
+    // デフォルトでは受渡完了 ('hand_over') として4軸ステータスを更新する。
+    // 明示的に actionOverride='cancel_order' が指定された場合は本当のキャンセルとして記録する。
+    action = 'hand_over';
+  }
+
+  const nextStatuses = computeNextOrderStatuses(currentDomain, action);
+
   const { data, error } = await supabase
     .from('orders')
-    .update({ status })
+    .update({
+      status: nextStatuses.status,
+      payment_status: nextStatuses.payment_status,
+      production_status: nextStatuses.production_status,
+      fulfillment_status: nextStatuses.fulfillment_status,
+      cancellation_status: nextStatuses.cancellation_status,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', orderId)
     .select()
     .single();
 
   if (error) {
-    // 見つからない場合は null を返す
     if (error.code === 'PGRST116') return null;
     throw new Error(`updateOrderStatus: ${error.message}`);
   }
-  return toOrder(data);
+  return toOrder(data as OrderDbRow);
 }
 
 export async function clearOrders(): Promise<void> {
@@ -207,9 +306,222 @@ export async function clearOrders(): Promise<void> {
   }
 }
 
-// ─── 店舗状態管理 (ハック: ordersテーブルの特定レコードに状態を保存) ──────────
+// ─── Phase 0-D: Stripe 決済確認リポジトリ実装 (Supabase) ──────────────────────
 
-const STORE_STATE_ID = 'STORE_STATE_001';
+export const supabasePaymentRepository: IPaymentConfirmationRepository = {
+  async claimStripeWebhookEvent(
+    eventId: string,
+    sessionId: string,
+    orderId: string
+  ): Promise<boolean> {
+    const { error } = await supabase.from('stripe_webhook_events').insert({
+      event_id: eventId,
+      session_id: sessionId,
+      order_id: orderId,
+      processed_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      // 23505 = unique_violation (すでに処理済みの Webhook イベント)
+      if (error.code === '23505') {
+        return false;
+      }
+      throw new Error(`claimStripeWebhookEvent failed: ${error.message}`);
+    }
+    return true;
+  },
+
+  async getOrderById(orderId: string): Promise<OrderRecordForPayment | null> {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null;
+      throw new Error(`getOrderById failed: ${error.message}`);
+    }
+    const row = data as OrderDbRow;
+    return {
+      id: row.id,
+      orderNumber: row.order_number,
+      totalPrice: row.total_price,
+      status: row.status,
+      paymentStatus: row.payment_status,
+      productionStatus: row.production_status,
+      fulfillmentStatus: row.fulfillment_status,
+      cancellationStatus: row.cancellation_status,
+      stripeSessionId: row.stripe_session_id,
+    };
+  },
+
+  async atomicConfirmOrderPayment({
+    orderId,
+    stripeSessionId,
+  }): Promise<{
+    updatedOrder: OrderRecordForPayment | null;
+    transitionedFromUnpaid: boolean;
+  }> {
+    // 1. まず status = 'unpaid' の注文に限定した条件付き UPDATE を試行する
+    //    (これにより、すでに preparing / completed になっている注文を絶対に pending に巻き戻さない)
+    const { data: transitionedData, error: transitionError } = await supabase
+      .from('orders')
+      .update({
+        status: 'pending',
+        payment_status: 'paid',
+        production_status: 'pending',
+        fulfillment_status: 'not_handed_over',
+        cancellation_status: 'active',
+        stripe_session_id: stripeSessionId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .eq('status', 'unpaid')
+      .select()
+      .maybeSingle();
+
+    if (transitionError) {
+      throw new Error(`atomicConfirmOrderPayment(transition) failed: ${transitionError.message}`);
+    }
+
+    if (transitionedData) {
+      const row = transitionedData as OrderDbRow;
+      return {
+        updatedOrder: {
+          id: row.id,
+          orderNumber: row.order_number,
+          totalPrice: row.total_price,
+          status: row.status,
+          paymentStatus: row.payment_status,
+          productionStatus: row.production_status,
+          fulfillmentStatus: row.fulfillment_status,
+          cancellationStatus: row.cancellation_status,
+          stripeSessionId: row.stripe_session_id,
+        },
+        transitionedFromUnpaid: true,
+      };
+    }
+
+    // 2. すでに status !== 'unpaid' (例: pending, preparing, completed) の場合は、
+    //    製造状態を一切変更せず、payment_status='paid' と stripe_session_id だけを冪等に記録する
+    const { data: existingData, error: existingError } = await supabase
+      .from('orders')
+      .update({
+        payment_status: 'paid',
+        stripe_session_id: stripeSessionId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', orderId)
+      .select()
+      .maybeSingle();
+
+    if (existingError) {
+      throw new Error(`atomicConfirmOrderPayment(idempotent) failed: ${existingError.message}`);
+    }
+
+    if (!existingData) {
+      return { updatedOrder: null, transitionedFromUnpaid: false };
+    }
+
+    const row = existingData as OrderDbRow;
+    return {
+      updatedOrder: {
+        id: row.id,
+        orderNumber: row.order_number,
+        totalPrice: row.total_price,
+        status: row.status,
+        paymentStatus: row.payment_status,
+        productionStatus: row.production_status,
+        fulfillmentStatus: row.fulfillment_status,
+        cancellationStatus: row.cancellation_status,
+        stripeSessionId: row.stripe_session_id,
+      },
+      transitionedFromUnpaid: false,
+    };
+  },
+};
+
+// ─── Phase 0-B: 永続認証ストア (Vercel マルチインスタンス対応) ────────────────
+
+export const supabaseAuthPersistenceStore: IAuthPersistenceStore = {
+  async getRateLimit(identifier: string): Promise<RateLimitRecord | null> {
+    const { data, error } = await supabase
+      .from('auth_login_rate_limits')
+      .select('*')
+      .eq('identifier', identifier)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return {
+      identifier: data.identifier,
+      attempts: data.attempts,
+      firstAttemptAt: new Date(data.first_attempt_at).getTime(),
+      lockedUntil: data.locked_until ? new Date(data.locked_until).getTime() : null,
+    };
+  },
+
+  async saveRateLimit(record: RateLimitRecord): Promise<void> {
+    const { error } = await supabase.from('auth_login_rate_limits').upsert({
+      identifier: record.identifier,
+      attempts: record.attempts,
+      first_attempt_at: new Date(record.firstAttemptAt).toISOString(),
+      locked_until: record.lockedUntil ? new Date(record.lockedUntil).toISOString() : null,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) {
+      throw new Error(`saveRateLimit failed: ${error.message}`);
+    }
+  },
+
+  async clearRateLimit(identifier: string): Promise<void> {
+    await supabase
+      .from('auth_login_rate_limits')
+      .delete()
+      .eq('identifier', identifier);
+  },
+
+  async saveSession(record: PersistentSessionRecord): Promise<void> {
+    const { error } = await supabase.from('auth_sessions').upsert({
+      session_id: record.sessionId,
+      role: record.role,
+      issued_at: new Date(record.issuedAt).toISOString(),
+      expires_at: new Date(record.expiresAt).toISOString(),
+      revoked: record.revoked,
+    });
+    if (error) {
+      throw new Error(`saveSession failed: ${error.message}`);
+    }
+  },
+
+  async getSession(sessionId: string): Promise<PersistentSessionRecord | null> {
+    const { data, error } = await supabase
+      .from('auth_sessions')
+      .select('*')
+      .eq('session_id', sessionId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return {
+      sessionId: data.session_id,
+      role: data.role,
+      issuedAt: new Date(data.issued_at).getTime(),
+      expiresAt: new Date(data.expires_at).getTime(),
+      revoked: Boolean(data.revoked),
+    };
+  },
+
+  async revokeSession(sessionId: string): Promise<void> {
+    await supabase
+      .from('auth_sessions')
+      .update({ revoked: true, updated_at: new Date().toISOString() })
+      .eq('session_id', sessionId);
+  },
+};
+
+// ─── 店舗状態管理 (STORE_STATE_001: 開店状態・欠品管理専用として保護) ──────────
+
+export const STORE_STATE_ID = 'STORE_STATE_001';
 
 export interface StoreState {
   isManualOpen: boolean;

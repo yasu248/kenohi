@@ -1,6 +1,7 @@
 import { type NextRequest } from 'next/server';
 import Stripe from 'stripe';
-import { updateOrderStatus } from '../../../../lib/store';
+import { supabasePaymentRepository } from '../../../../lib/store';
+import { verifyAndConfirmStripePayment } from '../../../../lib/stripeConfirmation';
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'sk_test_mock';
 const stripe = new Stripe(stripeSecretKey, {
@@ -25,10 +26,11 @@ export async function POST(request: NextRequest) {
 
   try {
     event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
-  } catch (err: any) {
-    console.error(`Webhook signature verification failed:`, err.message);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Invalid signature';
+    console.error('Webhook signature verification failed:', message);
     return Response.json(
-      { error: `Webhook Error: ${err.message}` },
+      { error: `Webhook Error: ${message}` },
       { status: 400 }
     );
   }
@@ -36,18 +38,34 @@ export async function POST(request: NextRequest) {
   // Handle the event
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
-    const orderId = session.metadata?.orderId;
 
-    if (orderId) {
-      try {
-        console.log(`[Webhook] Stripe payment succeeded. Updating order ${orderId} to 'pending'`);
-        await updateOrderStatus(orderId, 'pending');
-      } catch (err) {
-        console.error(`[Webhook] Failed to update order status in database:`, err);
-        return Response.json({ error: 'Database update failed' }, { status: 500 });
+    try {
+      const confirmation = await verifyAndConfirmStripePayment({
+        session: {
+          id: session.id,
+          payment_status: session.payment_status,
+          amount_total: session.amount_total,
+          currency: session.currency,
+          metadata: session.metadata,
+        },
+        repo: supabasePaymentRepository,
+        webhookEventId: event.id,
+      });
+
+      if (!confirmation.ok) {
+        console.warn(`[Webhook] Validation rejected session ${session.id}: ${confirmation.message}`);
+        return Response.json(
+          { error: confirmation.message, code: confirmation.code },
+          { status: confirmation.status }
+        );
       }
-    } else {
-      console.warn('[Webhook] No orderId found in session metadata');
+
+      console.log(
+        `[Webhook] Stripe payment verified for order ${confirmation.orderId} (status=${confirmation.currentStatus}, replay=${confirmation.idempotentReplay})`
+      );
+    } catch (err) {
+      console.error('[Webhook] Failed to confirm order payment in database:', err);
+      return Response.json({ error: 'Database update failed' }, { status: 500 });
     }
   }
 

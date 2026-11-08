@@ -95,9 +95,17 @@ export default function SoldOutManager() {
     try {
       const res = await fetch('/api/sold-out', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
         body: JSON.stringify({ soldOutItems: Array.from(soldOutItems) }),
       });
+      if (res.status === 401) {
+        alert('セッションが期限切れです。キッチン画面から再度ログインしてください。');
+        window.location.href = '/kitchen';
+        return;
+      }
       if (!res.ok) throw new Error('save error');
       setSavedItems(new Set(soldOutItems));
       setSavedFeedback(true);

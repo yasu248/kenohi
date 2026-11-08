@@ -1,8 +1,16 @@
 import { type NextRequest } from 'next/server';
-import { getOrders, addOrder } from '../../../lib/store';
+import { getOrders, addOrder, supabaseAuthPersistenceStore } from '../../../lib/store';
+import { authorizeStaffRequest } from '../../../lib/auth';
 
-// GET /api/orders — 全注文を返す（キッチン画面がポーリングで使う）
-export async function GET() {
+// GET /api/orders — 全注文詳細（顧客名・明細含む）を返す（キッチン画面専用・要スタッフ認証）
+export async function GET(request: NextRequest) {
+  const auth = await authorizeStaffRequest(request, supabaseAuthPersistenceStore, {
+    enforceCsrf: false,
+  });
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const orders = await getOrders();
     return Response.json(orders);
@@ -12,8 +20,16 @@ export async function GET() {
   }
 }
 
-// POST /api/orders — 新規注文を登録する（お客さん画面が使う）
+// POST /api/orders — スタッフ管理用注文登録（未認証の外部不正呼び出しをブロック）
+// ※一般顧客のモバイル注文は `/api/checkout` を使用します。
 export async function POST(request: NextRequest) {
+  const auth = await authorizeStaffRequest(request, supabaseAuthPersistenceStore, {
+    enforceCsrf: true,
+  });
+  if (!auth.authorized) {
+    return Response.json({ error: auth.error }, { status: auth.status });
+  }
+
   const body = await request.json();
   const { items, customerName, customerAvatar } = body;
 

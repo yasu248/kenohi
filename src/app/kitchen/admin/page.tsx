@@ -100,7 +100,16 @@ export default function AdminPage() {
     if (!confirm('すべてのご注文データをクリアして初期化しますか？\nこの操作は元に戻せません。')) return;
     setIsClearing(true);
     try {
-      await fetch('/api/orders/all', { method: 'DELETE' });
+      const res = await fetch('/api/orders/all', {
+        method: 'DELETE',
+        headers: { 'x-requested-with': 'kenocha-staff' },
+      });
+      if (res.status === 401 || res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.error || 'この操作には管理者権限でのログインが必要です。');
+        return;
+      }
+      if (!res.ok) throw new Error('delete failed');
       alert('注文データをクリアしました。');
     } catch (err) {
       console.error('クリアに失敗しました', err);

@@ -1,14 +1,23 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { authorizeStaffRequest } from '../../../../lib/auth';
+import { supabaseAuthPersistenceStore, toOrder } from '../../../../lib/store';
 
 const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SECRET_KEY!
+  process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
+  process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key'
 );
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await authorizeStaffRequest(request, supabaseAuthPersistenceStore, {
+    enforceCsrf: false,
+  });
+  if (!auth.authorized) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     // 過去7日分（今日を含む）の開始時刻をJST基準で算出（それ以上前は除外）
     const nowJST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
@@ -32,16 +41,7 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const orders = (data ?? []).map((row) => ({
-      id: row.id,
-      orderNumber: row.order_number,
-      customerName: row.customer_name,
-      customerAvatar: row.customer_avatar,
-      items: row.items,
-      totalPrice: row.total_price,
-      status: row.status,
-      createdAt: row.created_at,
-    }));
+    const orders = (data ?? []).map((row) => toOrder(row));
 
     return NextResponse.json(orders);
   } catch (error) {

@@ -53,15 +53,14 @@ function playOrderChime() {
   } catch (e) {}
 }
 
-// キッチン画面へのアクセスパスワード
-// 本番環境では環境変数や認証サービスに差し替えてください
-const KITCHEN_PASSWORD = 'kenohi2026';
 const POLL_INTERVAL_MS = 2000; // 2秒ごとにポーリング
 
 export default function KitchenMonitor() {
   const [authed, setAuthed] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
+  const [loginErrorMessage, setLoginErrorMessage] = useState('パスワードが正しくありません');
   const [orders, setOrders] = useState<Order[]>([]);
   const [printedCups, setPrintedCups] = useState<Record<string, number[]>>({});
   const [scannedCups, setScannedCups] = useState<Record<string, string[]>>({});
@@ -170,6 +169,10 @@ export default function KitchenMonitor() {
   const fetchOrders = useCallback(async (isInitial = false) => {
     try {
       const res = await fetch('/api/orders');
+      if (res.status === 401 || res.status === 403) {
+        setAuthed(false);
+        return;
+      }
       if (!res.ok) throw new Error('fetch error');
       const data: Order[] = await res.json();
 
@@ -201,12 +204,29 @@ export default function KitchenMonitor() {
     }
   }, []);
 
-  // ローカルストレージから認証状態を復元 (新しいタブ対策)
+  // サーバー側HttpOnlyセッションCookieの有効性を確認
   useEffect(() => {
-    const auth = localStorage.getItem('kitchen_auth');
-    if (auth === 'true') {
-      setAuthed(true);
+    let active = true;
+    async function verifySession() {
+      try {
+        const res = await fetch('/api/auth/session');
+        if (active) {
+          setAuthed(res.ok);
+        }
+      } catch {
+        if (active) {
+          setAuthed(false);
+        }
+      } finally {
+        if (active) {
+          setAuthChecking(false);
+        }
+      }
     }
+    verifySession();
+    return () => {
+      active = false;
+    };
   }, []);
 
   // 認証後にポーリング開始
@@ -217,15 +237,45 @@ export default function KitchenMonitor() {
     return () => clearInterval(timer);
   }, [authed, fetchOrders]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === KITCHEN_PASSWORD) {
-      localStorage.setItem('kitchen_auth', 'true');
-      setAuthed(true);
-      setPasswordError(false);
-    } else {
+    setPasswordError(false);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
+        body: JSON.stringify({ password: passwordInput }),
+      });
+
+      if (res.ok) {
+        setAuthed(true);
+        setPasswordError(false);
+        setPasswordInput('');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setLoginErrorMessage(errData.error || 'パスワードが正しくありません');
+        setPasswordError(true);
+        setPasswordInput('');
+      }
+    } catch {
+      setLoginErrorMessage('通信エラーが発生しました');
       setPasswordError(true);
-      setPasswordInput('');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'x-requested-with': 'kenocha-staff' },
+      });
+    } catch {
+      // ignore
+    } finally {
+      setAuthed(false);
     }
   };
 
@@ -590,11 +640,30 @@ export default function KitchenMonitor() {
     }
 
     try {
+      const action =
+        nextStatus === 'cancelled'
+          ? 'hand_over'
+          : nextStatus === 'preparing'
+            ? orders.find((o) => o.id === orderId)?.status === 'completed'
+              ? 'revert_to_preparing'
+              : 'start_preparing'
+            : nextStatus === 'completed'
+              ? 'mark_ready'
+              : 'revert_to_pending';
+
       const res = await fetch(`/api/orders/${orderId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
+        body: JSON.stringify({ status: nextStatus, action }),
       });
+      if (res.status === 401) {
+        setAuthed(false);
+        alert('セッションが期限切れになりました。再度ログインしてください。');
+        return;
+      }
       if (!res.ok) throw new Error('update error');
       // 即座に画面を更新（次のポーリングを待たない）
       await fetchOrders();
@@ -604,10 +673,54 @@ export default function KitchenMonitor() {
     }
   };
 
+  const handleCancelOrder = async (order: Order) => {
+    if (!confirm(`注文 #${order.orderNumber} を注文取消（キャンセル）しますか？\n※受渡完了ではなく、売上から除外される取消として記録されます。`)) return;
+    setScannedCups((prev) => {
+      const next = { ...prev };
+      delete next[order.id];
+      try { localStorage.setItem('scannedCups', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    setPrintedCups((prev) => {
+      const next = { ...prev };
+      delete next[order.id];
+      try { localStorage.setItem('printedCups', JSON.stringify(next)); } catch {}
+      return next;
+    });
+
+    try {
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
+        body: JSON.stringify({ status: 'cancelled', action: 'cancel_order' }),
+      });
+      if (res.status === 401) {
+        setAuthed(false);
+        return;
+      }
+      if (!res.ok) throw new Error('cancel error');
+      await fetchOrders();
+    } catch (err) {
+      console.error('注文取消に失敗しました', err);
+      alert('注文取消に失敗しました。');
+    }
+  };
+
   const handleClearOrders = async () => {
     if (!confirm('すべてのご注文データをクリアして初期化しますか？')) return;
     try {
-      await fetch('/api/orders/all', { method: 'DELETE' });
+      const res = await fetch('/api/orders/all', {
+        method: 'DELETE',
+        headers: { 'x-requested-with': 'kenocha-staff' },
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.error || 'クリアに失敗しました（管理者権限が必要です）');
+        return;
+      }
       localStorage.removeItem('scannedCups');
       localStorage.removeItem('printedCups');
       setScannedCups({});
@@ -652,7 +765,10 @@ export default function KitchenMonitor() {
     try {
       await fetch('/api/store-state', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
         body: JSON.stringify({ isManualOpen: nextState, date: dateStr, openedAt: nextState ? Date.now() : undefined })
       });
       await fetchOrders();
@@ -669,7 +785,10 @@ export default function KitchenMonitor() {
     try {
       await fetch('/api/store-state', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
         body: JSON.stringify({ isManualOpen: true, date: pendingOpenDateStr, openedAt: Date.now() })
       });
       await fetchOrders();
@@ -688,7 +807,10 @@ export default function KitchenMonitor() {
     try {
       await fetch('/api/store-state', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-requested-with': 'kenocha-staff',
+        },
         body: JSON.stringify({ isManualOpen: true, date: pendingOpenDateStr, openedAt: Date.now() })
       });
       await fetchOrders();
@@ -726,7 +848,13 @@ export default function KitchenMonitor() {
             </div>
             <h1 className={styles.loginTitle}>スタッフ専用</h1>
             <p className={styles.loginSubtitle}>
-              キッチンモニターにアクセスするには<br />スタッフパスワードを入力してください
+              {authChecking
+                ? 'セッションを確認中...'
+                : (
+                  <>
+                    キッチンモニターにアクセスするには<br />スタッフパスワードを入力してください
+                  </>
+                )}
             </p>
             <form onSubmit={handleLogin} className={styles.loginForm}>
               <input
@@ -741,7 +869,7 @@ export default function KitchenMonitor() {
                 autoFocus
               />
               {passwordError && (
-                <p className={styles.errorMsg}>パスワードが正しくありません</p>
+                <p className={styles.errorMsg}>{loginErrorMessage}</p>
               )}
               <button type="submit" className={styles.loginButton}>
                 ログイン
@@ -836,10 +964,7 @@ export default function KitchenMonitor() {
             </button>
             <button
               className={styles.navLink}
-              onClick={() => {
-                sessionStorage.removeItem('kitchen_auth');
-                setAuthed(false);
-              }}
+              onClick={handleLogout}
               title="ログアウト"
             >
               <Lock size={16} />
@@ -922,13 +1047,30 @@ export default function KitchenMonitor() {
                       ))}
                     </div>
 
-                    <div className={styles.cardActions}>
+                    <div className={styles.cardActions} style={{ display: 'flex', gap: '8px' }}>
                       <button
                         className={styles.btnPrimary}
                         onClick={() => handleStartPreparing(order)}
+                        style={{ flex: 1 }}
                       >
                         <Play size={14} />
                         調理を開始する
+                      </button>
+                      <button
+                        onClick={() => handleCancelOrder(order)}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: '6px',
+                          border: '1px solid #fecaca',
+                          backgroundColor: '#fef2f2',
+                          color: '#b91c1c',
+                          fontSize: '0.75rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                        title="注文取消（売上から除外）"
+                      >
+                        注文取消
                       </button>
                     </div>
                   </div>
