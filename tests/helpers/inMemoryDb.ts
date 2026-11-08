@@ -83,23 +83,67 @@ export class InMemoryTestDatabase {
 
   /**
    * PostgreSQL の原子的採番 RPC `next_order_number(p_store_id, p_order_date)` のシミュレーション
-   * INSERT ... ON CONFLICT (store_id, order_date) DO UPDATE SET last_number = ... RETURNING last_number
+   * - 当日の orders テーブル最大注文番号と STORE_STATE_001.lastOrderNumber の両方を確認し、
+   *   GREATEST(orders最大値, STORE_STATE最終値) + 1 から引き継ぐ
+   * - 4桁上限 (9999) 超過時は ORDER_NUMBER_LIMIT_EXCEEDED エラーを送出する
    */
   public rpcNextOrderNumber(storeId: string, orderDate: string): string {
     if (!this.migrationApplied) {
       throw new Error('PGRST202: Could not find the function public.next_order_number in the schema cache');
     }
+
+    const existingOrderNumbersForDate: string[] = [];
+    for (const row of this.orders.values()) {
+      if (row.id === 'STORE_STATE_001') continue;
+      const rowStoreId = row.store_id || 'kenocha_main';
+      if (rowStoreId !== storeId) continue;
+      const rowJstDate = getJSTDateString(new Date(row.created_at));
+      if (rowJstDate === orderDate) {
+        existingOrderNumbersForDate.push(row.order_number);
+      }
+    }
+
+    let storeStateSnapshot: LegacyStoreStateNumberSnapshot | null = null;
+    if (storeId === 'kenocha_main') {
+      const stateRow = this.orders.get('STORE_STATE_001');
+      if (stateRow?.customer_avatar) {
+        try {
+          storeStateSnapshot = JSON.parse(stateRow.customer_avatar) as LegacyStoreStateNumberSnapshot;
+        } catch {
+          storeStateSnapshot = null;
+        }
+      }
+    }
+
+    const handover = resolveInheritedOrderNumber({
+      orderDate,
+      existingOrderNumbersForDate,
+      storeState: storeStateSnapshot,
+    });
+
     const key = `${storeId}:${orderDate}`;
     const current = this.sequences.get(key);
     let next: number;
+
     if (current === undefined) {
-      next =
-        this.deterministicStartNumber !== null
-          ? this.deterministicStartNumber
-          : Math.floor(Math.random() * 2001) + 3000;
+      if (handover.inheritedLastNumber > 0) {
+        next = handover.inheritedLastNumber + 1;
+      } else {
+        next =
+          this.deterministicStartNumber !== null
+            ? this.deterministicStartNumber
+            : Math.floor(Math.random() * 2001) + 3000;
+      }
     } else {
-      next = current + 1;
+      next = Math.max(current, handover.inheritedLastNumber) + 1;
     }
+
+    if (next > MAX_DAILY_ORDER_NUMBER) {
+      throw new Error(
+        `ORDER_NUMBER_LIMIT_EXCEEDED: Daily 4-digit order number limit (${MAX_DAILY_ORDER_NUMBER}) reached for store ${storeId} on ${orderDate}`
+      );
+    }
+
     this.sequences.set(key, next);
     return String(next);
   }
