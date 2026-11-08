@@ -53,9 +53,30 @@ export async function POST(request: NextRequest) {
       });
 
       if (!confirmation.ok) {
-        console.warn(`[Webhook] Validation rejected session ${session.id}: ${confirmation.message}`);
+        if (confirmation.retryable) {
+          console.warn(
+            `[Webhook][Retryable] Session ${session.id} (event=${event.id}) not yet completed: ${confirmation.message}`
+          );
+          return Response.json(
+            {
+              error: confirmation.message,
+              code: confirmation.code,
+              retryable: true,
+            },
+            { status: confirmation.status }
+          );
+        }
+
+        console.error(
+          `[Webhook][PermanentValidationError] Session ${session.id} (event=${event.id}) rejected permanently: [${confirmation.code}] ${confirmation.message}`
+        );
         return Response.json(
-          { error: confirmation.message, code: confirmation.code },
+          {
+            error: confirmation.message,
+            code: confirmation.code,
+            retryable: false,
+            permanentFailureRecorded: Boolean(confirmation.permanentFailureRecorded),
+          },
           { status: confirmation.status }
         );
       }
