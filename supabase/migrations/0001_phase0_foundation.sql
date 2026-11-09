@@ -141,6 +141,7 @@ CREATE OR REPLACE FUNCTION public.next_order_number(
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_max_orders_num INTEGER := 0;
