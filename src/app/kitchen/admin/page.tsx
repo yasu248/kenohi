@@ -78,6 +78,12 @@ export default function AdminPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      const sessionRes = await fetch('/api/auth/session');
+      if (!sessionRes.ok) {
+        alert('スタッフ認証が必要です。キッチン画面からログインしてください。');
+        window.location.href = '/kitchen';
+        return;
+      }
       const res = await fetch('/api/store-state');
       if (res.ok) {
         const state = await res.json();

@@ -2,14 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getStoreState,
   setStoreState,
+  sanitizeStoreStateForResponse,
   supabaseAuthPersistenceStore,
 } from '../../../lib/store';
 import { authorizeStaffRequest } from '../../../lib/auth';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const state = await getStoreState();
-    return NextResponse.json(state || { isManualOpen: false, date: '' });
+    const [state, auth] = await Promise.all([
+      getStoreState(),
+      authorizeStaffRequest(req, supabaseAuthPersistenceStore, {
+        enforceCsrf: false,
+      }),
+    ]);
+    return NextResponse.json(sanitizeStoreStateForResponse(state, auth.authorized));
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal Server Error';
     return NextResponse.json({ error: message }, { status: 500 });

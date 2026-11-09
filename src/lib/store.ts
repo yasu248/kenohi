@@ -625,6 +625,46 @@ export interface StoreState {
   lastOrderNumber?: number;
 }
 
+/** 顧客向け公開用の最小店舗状態（内部管理情報を一切含まない） */
+export interface PublicStoreStateResponse {
+  isManualOpen: boolean;
+  date: string;
+  openedAt?: number;
+}
+
+/** スタッフ認証済み用の店舗状態（lastOrderNumber等の内部採番情報は公開しない） */
+export interface StaffStoreStateResponse extends PublicStoreStateResponse {
+  soldOutItems: string[];
+  openHistory: Array<{
+    date: string;
+    openedAt: number;
+    soldOutItems?: string[];
+  }>;
+}
+
+export function sanitizeStoreStateForResponse(
+  state: StoreState | null,
+  isStaffAuthenticated: boolean
+): PublicStoreStateResponse | StaffStoreStateResponse {
+  const base: PublicStoreStateResponse = {
+    isManualOpen: Boolean(state?.isManualOpen),
+    date: state?.date ?? '',
+  };
+  if (typeof state?.openedAt === 'number') {
+    base.openedAt = state.openedAt;
+  }
+
+  if (!isStaffAuthenticated) {
+    return base;
+  }
+
+  return {
+    ...base,
+    soldOutItems: state?.soldOutItems ?? [],
+    openHistory: state?.openHistory ?? [],
+  };
+}
+
 export async function getStoreState(): Promise<StoreState | null> {
   const { data, error } = await supabase
     .from('orders')

@@ -54,6 +54,12 @@ export default function SoldOutManager() {
   // サーバーから取得
   const fetchSoldOut = useCallback(async () => {
     try {
+      const sessionRes = await fetch('/api/auth/session');
+      if (!sessionRes.ok) {
+        alert('スタッフ認証が必要です。キッチン画面からログインしてください。');
+        window.location.href = '/kitchen';
+        return;
+      }
       const res = await fetch('/api/sold-out');
       if (res.ok) {
         const data = await res.json();

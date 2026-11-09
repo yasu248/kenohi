@@ -11,6 +11,7 @@ import {
   type RateLimitRecord,
   type SessionPayload,
 } from '../src/lib/auth.ts';
+import { sanitizeStoreStateForResponse, type StoreState } from '../src/lib/store.ts';
 
 class InMemoryAuthStore implements IAuthPersistenceStore {
   public sessions: Map<string, PersistentSessionRecord> = new Map();
@@ -190,5 +191,49 @@ describe('[Phase 0-B] スタッフ・管理者認証および認可テスト', (
     const res2 = await authorizeStaffRequest(req, store, { enforceCsrf: false });
     assert.equal(res2.authorized, false);
     if (!res2.authorized) assert.equal(res2.status, 401);
+  });
+
+  it('8. 環境変数名の厳格チェック: STAFF_PASSWORD / ADMIN_PASSWORD 未設定時は自動フォールバックせず 503 で設定ミスを検出すること', async () => {
+    delete process.env.STAFF_PASSWORD;
+    delete process.env.ADMIN_PASSWORD;
+    process.env.KITCHEN_STAFF_PASSWORD = 'legacy_wrong_env_name';
+
+    const res = await authenticateStaffLogin(store, 'legacy_wrong_env_name', 'ip_misconfig');
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.status, 503);
+    }
+
+    delete process.env.KITCHEN_STAFF_PASSWORD;
+  });
+
+  it('9. store-state 公開レスポンス最小化: 未認証時は openHistory や lastOrderNumber を一切含めないこと', () => {
+    const rawState: StoreState = {
+      isManualOpen: true,
+      date: '2026-11-10',
+      openedAt: 1762736400000,
+      soldOutItems: ['m1', 's3'],
+      openHistory: [{ date: '2026-11-10', openedAt: 1762736400000, soldOutItems: ['m1'] }],
+      currentOrderDate: '2026-11-10',
+      lastOrderNumber: 3456,
+    };
+
+    // 未認証（一般顧客画面向け）
+    const publicResp = sanitizeStoreStateForResponse(rawState, false) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(publicResp).sort(), ['date', 'isManualOpen', 'openedAt']);
+    assert.equal(publicResp.isManualOpen, true);
+    assert.equal(publicResp.date, '2026-11-10');
+    assert.equal(publicResp.openedAt, 1762736400000);
+    assert.equal('openHistory' in publicResp, false);
+    assert.equal('lastOrderNumber' in publicResp, false);
+    assert.equal('currentOrderDate' in publicResp, false);
+    assert.equal('soldOutItems' in publicResp, false);
+
+    // スタッフ認証済み（管理画面向け: openHistory, soldOutItems は返し、lastOrderNumber は返さない）
+    const staffResp = sanitizeStoreStateForResponse(rawState, true) as Record<string, unknown>;
+    assert.equal(Array.isArray(staffResp.openHistory), true);
+    assert.equal(Array.isArray(staffResp.soldOutItems), true);
+    assert.equal('lastOrderNumber' in staffResp, false);
+    assert.equal('currentOrderDate' in staffResp, false);
   });
 });
