@@ -141,7 +141,6 @@ CREATE OR REPLACE FUNCTION public.next_order_number(
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_max_orders_num INTEGER := 0;
@@ -318,7 +317,6 @@ CREATE OR REPLACE FUNCTION public.confirm_stripe_order_payment_tx(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_order public.orders%ROWTYPE;
@@ -333,12 +331,6 @@ BEGIN
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('found', FALSE);
-  END IF;
-
-  -- すでに取消済み (cancellation_status = 'cancelled') の注文は誤って復活・決済確定させない
-  IF v_order.cancellation_status = 'cancelled' THEN
-    RAISE EXCEPTION 'ORDER_CANCELLED: Order % is already cancelled and cannot be confirmed', p_order_id
-      USING ERRCODE = 'P0001';
   END IF;
 
   IF v_order.status = 'unpaid' THEN
@@ -432,58 +424,14 @@ CREATE TABLE IF NOT EXISTS public.auth_login_rate_limits (
 );
 
 -- -----------------------------------------------------------------------------
--- 6. Row Level Security (RLS) の有効化と RPC 実行権限の厳格化 (修正提案②)
---    - すべてのテーブルで RLS を有効化し、anon / authenticated からの直接アクセスを遮断
---    - SECURITY DEFINER 関数 (next_order_number, confirm_stripe_order_payment_tx) の
---      PUBLIC / anon / authenticated 実行権限を剥奪し、service_role のみに EXECUTE を付与
---    - マイグレーションを再実行しても権限設定が常に維持されるよう関数定義の直後に毎回適用
+-- 6. Row Level Security (RLS) の有効化
+--    ※ Next.js API Route は SUPABASE_SECRET_KEY (service_role) を使用するため RLS をバイパスし、
+--      万が一 anon key が外部に漏洩してもブラウザから直接テーブルを読み書きできないように保護します。
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.order_number_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stripe_webhook_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_login_rate_limits ENABLE ROW LEVEL SECURITY;
-
-REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
-
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM anon;
-    REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM anon;
-    REVOKE ALL ON TABLE
-      public.orders,
-      public.order_number_sequences,
-      public.stripe_webhook_events,
-      public.auth_sessions,
-      public.auth_login_rate_limits
-    FROM anon;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM authenticated;
-    REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM authenticated;
-    REVOKE ALL ON TABLE
-      public.orders,
-      public.order_number_sequences,
-      public.stripe_webhook_events,
-      public.auth_sessions,
-      public.auth_login_rate_limits
-    FROM authenticated;
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-    GRANT EXECUTE ON FUNCTION public.next_order_number(TEXT, TEXT) TO service_role;
-    GRANT EXECUTE ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) TO service_role;
-    GRANT ALL ON TABLE
-      public.orders,
-      public.order_number_sequences,
-      public.stripe_webhook_events,
-      public.auth_sessions,
-      public.auth_login_rate_limits
-    TO service_role;
-  END IF;
-END $$;
 
 COMMIT;
