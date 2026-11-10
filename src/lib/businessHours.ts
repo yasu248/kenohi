@@ -34,11 +34,12 @@ export function isBusinessHours(date: Date = new Date()): boolean {
 
 export function isStoreCurrentlyOpen(
   state: { isManualOpen: boolean; date: string; openedAt?: number } | null,
-  pageLoadJstDate?: Date
+  pageLoadJstDate?: Date,
+  now: Date = new Date()
 ): boolean {
   if (!state || !state.isManualOpen) return false;
   
-  const today = new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+  const today = now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
   const todayJst = new Date(today);
   const dateStr = `${todayJst.getFullYear()}-${String(todayJst.getMonth() + 1).padStart(2, '0')}-${String(todayJst.getDate()).padStart(2, '0')}`;
   
