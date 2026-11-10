@@ -383,10 +383,15 @@ export async function verifyAndConfirmStripePayment(params: {
       production_status: order.productionStatus,
       fulfillment_status: order.fulfillmentStatus,
       cancellation_status: order.cancellationStatus,
+      refunded_amount: order.refundedAmount,
+      refund_status: order.refundStatus,
+      requires_manual_attention: order.requiresManualAttention,
     });
 
-    if (domainState.cancellationStatus === 'cancelled') {
-      const message = 'すでに取消済みの注文であるため決済確定できません';
+    // 旧データ（legacy_undetermined）の保護:
+    // status='cancelled' だが 4軸カラムが未設定の旧データは受渡完了の可能性があるため、返金案件対象外とする
+    if (domainState.legacyClassification === 'legacy_undetermined') {
+      const message = '過去データ (legacy_undetermined) の注文は決済取消競合の対象外です';
       const recorded = await recordPermanentValidationFailure({
         repo,
         webhookEventId,
@@ -402,6 +407,58 @@ export async function verifyAndConfirmStripePayment(params: {
         status: 409,
         retryable: false,
         permanentFailureRecorded: recorded,
+      };
+    }
+
+    // 新ステータスでキャンセル済み（cancellationStatus === 'cancelled'）の注文に対して決済成功Webhookが到着した場合:
+    // 決済成功・注文取消の不整合を検知し、DBトランザクションで返金案件を永続化して管理者にアラート通知する
+    if (domainState.cancellationStatus === 'cancelled') {
+      const paymentIntentId =
+        typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : session.payment_intent?.id;
+      const message =
+        '注文は取消済みですがStripe上で決済成功が確認されました。返金案件として永続化し管理者に通知します';
+
+      let discrepancyRecorded = false;
+      if (repo.recordCancelledPaymentDiscrepancy) {
+        try {
+          const res = await repo.recordCancelledPaymentDiscrepancy({
+            orderId,
+            stripeSessionId: session.id,
+            paymentIntentId,
+            amount: session.amount_total ?? order.totalPrice,
+            currency: session.currency ?? 'jpy',
+            webhookEventId,
+            reason: 'cancelled_order_payment_received',
+          });
+          discrepancyRecorded = res.ok;
+        } catch (discErr) {
+          console.error('[PaymentDiscrepancy] Failed to record discrepancy to DB:', discErr);
+          if (webhookEventId) {
+            await repo.releaseStripeWebhookEventOnTransientError(
+              webhookEventId,
+              discErr instanceof Error ? discErr.message : 'Discrepancy recording failed'
+            );
+          }
+          throw discErr;
+        }
+      }
+
+      console.warn(
+        `[PaymentDiscrepancyAlert] CRITICAL: Paid order cancelled. orderId=${orderId} sessionId=${session.id} paymentIntent=${paymentIntentId ?? 'none'}`
+      );
+
+      return {
+        ok: false,
+        code: 'CANCELLED_PAYMENT_DISCREPANCY',
+        message,
+        status: 409,
+        retryable: false,
+        discrepancyRecorded,
+        orderId,
+        stripeSessionId: session.id,
+        paymentIntentId,
       };
     }
 
