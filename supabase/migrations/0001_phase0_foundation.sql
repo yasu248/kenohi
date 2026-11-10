@@ -26,6 +26,8 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS fulfillment_status TEXT,
   ADD COLUMN IF NOT EXISTS cancellation_status TEXT,
   ADD COLUMN IF NOT EXISTS refunded_amount INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS refund_status TEXT NOT NULL DEFAULT 'none',
+  ADD COLUMN IF NOT EXISTS requires_manual_attention BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS stripe_session_id TEXT,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
@@ -38,6 +40,14 @@ BEGIN
     ALTER TABLE public.orders
       ADD CONSTRAINT orders_payment_status_check
       CHECK (payment_status IS NULL OR payment_status IN ('unpaid', 'paid', 'partially_refunded', 'refunded', 'failed'));
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_refund_status_check'
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_refund_status_check
+      CHECK (refund_status IN ('none', 'pending', 'processing', 'succeeded', 'failed'));
   END IF;
 
   IF NOT EXISTS (
@@ -840,6 +850,265 @@ END;
 $$;
 
 -- -----------------------------------------------------------------------------
+-- 4C. 決済成功・注文取消不整合の永続化 & 返金管理テーブル・RPC (Phase 0-F)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.order_refund_requests (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL REFERENCES public.orders(id) ON DELETE RESTRICT,
+  stripe_session_id TEXT,
+  payment_intent_id TEXT,
+  amount INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'jpy',
+  target_refund_amount INTEGER NOT NULL,
+  refund_status TEXT NOT NULL DEFAULT 'pending' CHECK (refund_status IN ('pending', 'processing', 'succeeded', 'failed')),
+  stripe_refund_id TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  requires_manual_attention BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT order_refund_requests_order_id_key UNIQUE (order_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_refund_requests_status_attention
+  ON public.order_refund_requests (refund_status, requires_manual_attention);
+
+-- 決済成功・注文取消の不整合を検知し、安全に返金案件として永続化する RPC
+CREATE OR REPLACE FUNCTION public.record_cancelled_payment_discrepancy_tx(
+  p_order_id TEXT,
+  p_stripe_session_id TEXT,
+  p_payment_intent_id TEXT,
+  p_amount INTEGER,
+  p_currency TEXT DEFAULT 'jpy',
+  p_webhook_event_id TEXT DEFAULT NULL,
+  p_reason TEXT DEFAULT 'cancelled_order_payment_received'
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_order public.orders%ROWTYPE;
+  v_req public.order_refund_requests%ROWTYPE;
+BEGIN
+  -- Lock Level 3: 対象注文を行ロック
+  SELECT *
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', FALSE, 'code', 'ORDER_NOT_FOUND');
+  END IF;
+
+  -- 旧データ（legacy_undetermined: payment_status IS NULL かつ cancellation_status IS NULL）は保護
+  IF v_order.payment_status IS NULL AND v_order.cancellation_status IS NULL THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'LEGACY_ORDER_PROTECTED',
+      'message', '過去注文（legacy_undetermined）は返金自動対象外です'
+    );
+  END IF;
+
+  -- 注文ステータスがキャンセル済みでない場合は不整合ではないため拒否
+  IF COALESCE(v_order.cancellation_status, 'active') <> 'cancelled' THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'ORDER_NOT_CANCELLED',
+      'message', '注文は取消状態ではありません'
+    );
+  END IF;
+
+  -- orders テーブルの状態を更新（返金待ち & 管理者要対応）
+  -- 注文ステータスは 'cancelled' を絶対に維持し、製造・受渡には進めない
+  UPDATE public.orders
+  SET
+    refund_status = CASE
+      WHEN refund_status = 'succeeded' THEN 'succeeded'
+      ELSE 'pending'
+    END,
+    requires_manual_attention = CASE
+      WHEN refund_status = 'succeeded' THEN FALSE
+      ELSE TRUE
+    END,
+    stripe_session_id = COALESCE(p_stripe_session_id, stripe_session_id),
+    updated_at = NOW()
+  WHERE id = p_order_id
+  RETURNING * INTO v_order;
+
+  -- order_refund_requests に原子的・冪等に記録（ON CONFLICT DO UPDATE で重複登録防止）
+  INSERT INTO public.order_refund_requests (
+    id,
+    order_id,
+    stripe_session_id,
+    payment_intent_id,
+    amount,
+    currency,
+    target_refund_amount,
+    refund_status,
+    stripe_refund_id,
+    attempt_count,
+    last_error,
+    requires_manual_attention,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    'refreq_' || p_order_id,
+    p_order_id,
+    p_stripe_session_id,
+    p_payment_intent_id,
+    p_amount,
+    LOWER(COALESCE(p_currency, 'jpy')),
+    p_amount,
+    'pending',
+    NULL,
+    0,
+    p_reason,
+    TRUE,
+    NOW(),
+    NOW()
+  )
+  ON CONFLICT (order_id)
+  DO UPDATE SET
+    stripe_session_id = COALESCE(EXCLUDED.stripe_session_id, public.order_refund_requests.stripe_session_id),
+    payment_intent_id = COALESCE(EXCLUDED.payment_intent_id, public.order_refund_requests.payment_intent_id),
+    amount = EXCLUDED.amount,
+    target_refund_amount = EXCLUDED.target_refund_amount,
+    last_error = EXCLUDED.last_error,
+    updated_at = NOW()
+  RETURNING * INTO v_req;
+
+  -- Webhook 経由の場合は、同一トランザクション内でイベントを succeeded（不整合検知・案件永続化完了）として確定
+  IF p_webhook_event_id IS NOT NULL THEN
+    INSERT INTO public.stripe_webhook_events (
+      event_id,
+      session_id,
+      order_id,
+      status,
+      attempt_count,
+      error_code,
+      error_message,
+      started_at,
+      processed_at,
+      updated_at
+    )
+    VALUES (
+      p_webhook_event_id,
+      p_stripe_session_id,
+      p_order_id,
+      'succeeded',
+      1,
+      NULL,
+      NULL,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (event_id)
+    DO UPDATE SET
+      status = 'succeeded',
+      error_code = NULL,
+      error_message = NULL,
+      processed_at = NOW(),
+      updated_at = NOW();
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'order_id', p_order_id,
+    'refund_request', to_jsonb(v_req),
+    'order', to_jsonb(v_order)
+  );
+END;
+$$;
+
+-- 返金実行状態（succeeded / failed / processing）を安全に更新する RPC
+CREATE OR REPLACE FUNCTION public.update_refund_request_status_tx(
+  p_order_id TEXT,
+  p_refund_status TEXT,
+  p_stripe_refund_id TEXT DEFAULT NULL,
+  p_last_error TEXT DEFAULT NULL,
+  p_requires_manual_attention BOOLEAN DEFAULT NULL,
+  p_increment_attempt BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_req public.order_refund_requests%ROWTYPE;
+  v_order public.orders%ROWTYPE;
+  v_new_attention BOOLEAN;
+BEGIN
+  -- Lock Level 3: 対象注文・返金案件を行ロック
+  SELECT *
+  INTO v_req
+  FROM public.order_refund_requests
+  WHERE order_id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', FALSE, 'code', 'REFUND_REQUEST_NOT_FOUND');
+  END IF;
+
+  SELECT *
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF p_requires_manual_attention IS NOT NULL THEN
+    v_new_attention := p_requires_manual_attention;
+  ELSIF p_refund_status = 'succeeded' THEN
+    v_new_attention := FALSE;
+  ELSIF p_refund_status = 'failed' THEN
+    v_new_attention := TRUE;
+  ELSE
+    v_new_attention := v_req.requires_manual_attention;
+  END IF;
+
+  UPDATE public.order_refund_requests
+  SET
+    refund_status = p_refund_status,
+    stripe_refund_id = COALESCE(p_stripe_refund_id, stripe_refund_id),
+    last_error = COALESCE(p_last_error, last_error),
+    attempt_count = CASE WHEN p_increment_attempt THEN attempt_count + 1 ELSE attempt_count END,
+    requires_manual_attention = v_new_attention,
+    updated_at = NOW()
+  WHERE order_id = p_order_id
+  RETURNING * INTO v_req;
+
+  IF FOUND THEN
+    UPDATE public.orders
+    SET
+      refund_status = p_refund_status,
+      requires_manual_attention = v_new_attention,
+      payment_status = CASE
+        WHEN p_refund_status = 'succeeded' THEN 'refunded'
+        ELSE payment_status
+      END,
+      refunded_amount = CASE
+        WHEN p_refund_status = 'succeeded' THEN v_req.target_refund_amount
+        ELSE refunded_amount
+      END,
+      updated_at = NOW()
+    WHERE id = p_order_id
+    RETURNING * INTO v_order;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'refund_request', to_jsonb(v_req),
+    'order', to_jsonb(v_order)
+  );
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- 5. スタッフ認証セッション & ログイン試行回数制限テーブル (Phase 0-B)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.auth_sessions (
@@ -867,6 +1136,7 @@ CREATE TABLE IF NOT EXISTS public.auth_login_rate_limits (
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.order_number_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stripe_webhook_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.order_refund_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_login_rate_limits ENABLE ROW LEVEL SECURITY;
 
@@ -881,6 +1151,8 @@ REVOKE ALL ON FUNCTION public.update_store_state_tx(TEXT, JSONB) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM PUBLIC;
 
 DO $$
 BEGIN
@@ -891,6 +1163,8 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM anon';
     EXECUTE 'REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM anon';
     EXECUTE 'REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM anon';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
@@ -900,6 +1174,8 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM authenticated';
     EXECUTE 'REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM authenticated';
     EXECUTE 'REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM authenticated';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
@@ -909,6 +1185,8 @@ BEGIN
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) TO service_role';
   END IF;
 END $$;
 
