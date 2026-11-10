@@ -68,6 +68,8 @@ export interface Order {
   cancellationStatus?: CancellationStatus;
   legacyClassification?: LegacyStatusClassification;
   refundedAmount?: number;
+  refundStatus?: RefundStatus;
+  requiresManualAttention?: boolean;
   stripeSessionId?: string;
 }
 
@@ -77,6 +79,24 @@ export interface PublicOrderSummary {
   orderNumber: string;
   status: 'pending' | 'preparing' | 'completed';
   createdAt: string;
+}
+
+export interface OrderRefundRequestRecord {
+  id: string;
+  orderId: string;
+  orderNumber?: string;
+  stripeSessionId?: string | null;
+  paymentIntentId?: string | null;
+  amount: number;
+  currency: string;
+  targetRefundAmount: number;
+  refundStatus: 'pending' | 'processing' | 'succeeded' | 'failed';
+  stripeRefundId?: string | null;
+  attemptCount: number;
+  lastError?: string | null;
+  requiresManualAttention: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface OrderDbRow {
@@ -96,6 +116,8 @@ interface OrderDbRow {
   fulfillment_status?: string | null;
   cancellation_status?: string | null;
   refunded_amount?: number | null;
+  refund_status?: string | null;
+  requires_manual_attention?: boolean | null;
   stripe_session_id?: string | null;
 }
 
@@ -120,6 +142,8 @@ export function toOrder(row: OrderDbRow): Order {
     cancellationStatus: domain.cancellationStatus,
     legacyClassification: domain.legacyClassification,
     refundedAmount: domain.refundedAmount,
+    refundStatus: domain.refundStatus,
+    requiresManualAttention: domain.requiresManualAttention,
     stripeSessionId: row.stripe_session_id ?? undefined,
   };
 }
@@ -640,6 +664,9 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
       productionStatus: row.production_status,
       fulfillmentStatus: row.fulfillment_status,
       cancellationStatus: row.cancellation_status,
+      refundedAmount: row.refunded_amount,
+      refundStatus: row.refund_status,
+      requiresManualAttention: row.requires_manual_attention,
       stripeSessionId: row.stripe_session_id,
     };
   },
@@ -685,12 +712,120 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
         productionStatus: row.production_status,
         fulfillmentStatus: row.fulfillment_status,
         cancellationStatus: row.cancellation_status,
+        refundedAmount: row.refunded_amount,
+        refundStatus: row.refund_status,
+        requiresManualAttention: row.requires_manual_attention,
         stripeSessionId: row.stripe_session_id,
       },
       transitionedFromUnpaid: Boolean(payload.transitioned_from_unpaid),
     };
   },
+
+  async recordCancelledPaymentDiscrepancy({
+    orderId,
+    stripeSessionId,
+    paymentIntentId,
+    amount,
+    currency = 'jpy',
+    webhookEventId,
+    reason = 'cancelled_order_payment_received',
+  }): Promise<{ ok: boolean; refundRequestId?: string; alreadyRecorded?: boolean }> {
+    const { data, error } = await supabase.rpc('record_cancelled_payment_discrepancy_tx', {
+      p_order_id: orderId,
+      p_stripe_session_id: stripeSessionId,
+      p_payment_intent_id: paymentIntentId ?? null,
+      p_amount: amount,
+      p_currency: currency,
+      p_webhook_event_id: webhookEventId ?? null,
+      p_reason: reason,
+    });
+
+    if (error) {
+      throw new Error(`recordCancelledPaymentDiscrepancy failed: ${error.message}`);
+    }
+
+    const payload = data as {
+      ok?: boolean;
+      order_id?: string;
+      refund_request?: { id: string };
+      code?: string;
+      message?: string;
+    } | null;
+
+    if (!payload || !payload.ok) {
+      console.warn(
+        `[recordCancelledPaymentDiscrepancy] RPC returned not ok: code=${payload?.code} message=${payload?.message}`
+      );
+      return { ok: false };
+    }
+
+    return {
+      ok: true,
+      refundRequestId: payload.refund_request?.id,
+    };
+  },
 };
+
+/**
+ * 未解決の返金案件一覧を取得する（管理画面アラート表示用）
+ */
+export async function getUnresolvedRefundRequests(): Promise<OrderRefundRequestRecord[]> {
+  const { data, error } = await supabase
+    .from('order_refund_requests')
+    .select('*, orders(order_number)')
+    .or('refund_status.neq.succeeded,requires_manual_attention.eq.true')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw new Error(`getUnresolvedRefundRequests failed: ${error.message}`);
+  }
+
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    orderId: row.order_id,
+    orderNumber: row.orders?.order_number,
+    stripeSessionId: row.stripe_session_id,
+    paymentIntentId: row.payment_intent_id,
+    amount: row.amount,
+    currency: row.currency,
+    targetRefundAmount: row.target_refund_amount,
+    refundStatus: row.refund_status,
+    stripeRefundId: row.stripe_refund_id,
+    attemptCount: row.attempt_count,
+    lastError: row.last_error,
+    requiresManualAttention: Boolean(row.requires_manual_attention),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+/**
+ * 返金案件の実行状態を更新する RPC ラッパー
+ */
+export async function updateRefundRequestStatus(params: {
+  orderId: string;
+  refundStatus: 'pending' | 'processing' | 'succeeded' | 'failed';
+  stripeRefundId?: string;
+  lastError?: string;
+  requiresManualAttention?: boolean;
+  incrementAttempt?: boolean;
+}): Promise<{ ok: boolean; code?: string }> {
+  const { data, error } = await supabase.rpc('update_refund_request_status_tx', {
+    p_order_id: params.orderId,
+    p_refund_status: params.refundStatus,
+    p_stripe_refund_id: params.stripeRefundId ?? null,
+    p_last_error: params.lastError ?? null,
+    p_requires_manual_attention: params.requiresManualAttention ?? null,
+    p_increment_attempt: Boolean(params.incrementAttempt),
+  });
+
+  if (error) {
+    throw new Error(`updateRefundRequestStatus failed: ${error.message}`);
+  }
+
+  const payload = data as { ok?: boolean; code?: string } | null;
+  return { ok: Boolean(payload?.ok), code: payload?.code };
+}
 
 // ─── Phase 0-B: 永続認証ストア (Vercel マルチインスタンス対応) ────────────────
 

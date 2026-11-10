@@ -47,12 +47,24 @@ export async function POST(request: NextRequest) {
           amount_total: session.amount_total,
           currency: session.currency,
           metadata: session.metadata,
+          payment_intent: session.payment_intent,
         },
         repo: supabasePaymentRepository,
         webhookEventId: event.id,
       });
 
       if (!confirmation.ok) {
+        if (confirmation.code === 'CANCELLED_PAYMENT_DISCREPANCY') {
+          console.warn(
+            `[Webhook][PaymentDiscrepancy] Session ${session.id} (event=${event.id}) order ${confirmation.orderId} was cancelled but paid. Discrepancy recorded to refund queue.`
+          );
+          return Response.json({
+            received: true,
+            status: 'discrepancy_recorded_for_refund',
+            orderId: confirmation.orderId,
+          });
+        }
+
         if (confirmation.retryable) {
           console.warn(
             `[Webhook][Retryable] Session ${session.id} (event=${event.id}) not yet completed: ${confirmation.message}`
