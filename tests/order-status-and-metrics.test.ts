@@ -32,6 +32,8 @@ describe('[Phase 0-C / 0-F] 4軸注文ステータス・過去データ保護・
       cancellationStatus: 'active',
       legacyClassification: 'four_axis_explicit',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source: 'mobile',
     };
 
@@ -50,6 +52,8 @@ describe('[Phase 0-C / 0-F] 4軸注文ステータス・過去データ保護・
       cancellationStatus: 'active',
       legacyClassification: 'four_axis_explicit',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source: 'mobile',
     };
 

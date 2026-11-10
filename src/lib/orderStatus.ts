@@ -46,6 +46,13 @@ export type CancellationStatus =
   | 'active'
   | 'cancelled';
 
+export type RefundStatus =
+  | 'none'
+  | 'pending'
+  | 'processing'
+  | 'succeeded'
+  | 'failed';
+
 /**
  * 過去データの判定区分
  * - 'four_axis_explicit': Phase 0 以降の4軸ステータスが明示的に記録されている注文
@@ -65,6 +72,8 @@ export interface OrderDomainState {
   cancellationStatus: CancellationStatus;
   legacyClassification: LegacyStatusClassification;
   refundedAmount: number;
+  refundStatus: RefundStatus;
+  requiresManualAttention: boolean;
   source: OrderSource;
   externalOrderId?: string;
 }
@@ -79,12 +88,22 @@ export function resolveOrderDomainState(row: {
   fulfillment_status?: string | null;
   cancellation_status?: string | null;
   refunded_amount?: number | null;
+  refund_status?: string | null;
+  requires_manual_attention?: boolean | null;
   source?: string | null;
   external_order_id?: string | null;
 }): OrderDomainState {
   const legacyStatus = (row.status || 'unpaid') as LegacyOrderStatus;
   const source = ((row.source as OrderSource) || 'mobile');
   const refundedAmount = typeof row.refunded_amount === 'number' ? Math.max(0, row.refunded_amount) : 0;
+  const refundStatus: RefundStatus =
+    row.refund_status === 'pending' ||
+    row.refund_status === 'processing' ||
+    row.refund_status === 'succeeded' ||
+    row.refund_status === 'failed'
+      ? row.refund_status
+      : 'none';
+  const requiresManualAttention = Boolean(row.requires_manual_attention);
 
   const hasExplicitFourAxis = Boolean(
     row.payment_status ||
@@ -110,6 +129,8 @@ export function resolveOrderDomainState(row: {
         (row.cancellation_status as CancellationStatus) || 'active',
       legacyClassification: 'four_axis_explicit',
       refundedAmount,
+      refundStatus,
+      requiresManualAttention,
       source,
       externalOrderId: row.external_order_id ?? undefined,
     };
@@ -125,6 +146,8 @@ export function resolveOrderDomainState(row: {
       cancellationStatus: 'active',
       legacyClassification: 'legacy_in_progress',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source,
       externalOrderId: row.external_order_id ?? undefined,
     };
@@ -139,6 +162,8 @@ export function resolveOrderDomainState(row: {
       cancellationStatus: 'active',
       legacyClassification: 'legacy_in_progress',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source,
       externalOrderId: row.external_order_id ?? undefined,
     };
@@ -153,6 +178,8 @@ export function resolveOrderDomainState(row: {
       cancellationStatus: 'active',
       legacyClassification: 'legacy_in_progress',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source,
       externalOrderId: row.external_order_id ?? undefined,
     };
@@ -167,6 +194,8 @@ export function resolveOrderDomainState(row: {
       cancellationStatus: 'active',
       legacyClassification: 'legacy_in_progress',
       refundedAmount: 0,
+      refundStatus: 'none',
+      requiresManualAttention: false,
       source,
       externalOrderId: row.external_order_id ?? undefined,
     };
@@ -182,6 +211,8 @@ export function resolveOrderDomainState(row: {
     cancellationStatus: 'active',
     legacyClassification: 'legacy_undetermined',
     refundedAmount: 0,
+    refundStatus: 'none',
+    requiresManualAttention: false,
     source,
     externalOrderId: row.external_order_id ?? undefined,
   };

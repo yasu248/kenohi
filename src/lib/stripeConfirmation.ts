@@ -39,6 +39,9 @@ export interface OrderRecordForPayment {
   productionStatus?: string | null;
   fulfillmentStatus?: string | null;
   cancellationStatus?: string | null;
+  refundedAmount?: number | null;
+  refundStatus?: string | null;
+  requiresManualAttention?: boolean | null;
   stripeSessionId?: string | null;
 }
 
@@ -49,6 +52,7 @@ export type PaymentRejectionCode =
   | 'CURRENCY_MISMATCH'
   | 'AMOUNT_MISMATCH'
   | 'ORDER_CANCELLED'
+  | 'CANCELLED_PAYMENT_DISCREPANCY'
   | 'WEBHOOK_IN_PROGRESS';
 
 export type WebhookEventStatus = 'processing' | 'succeeded' | 'failed_permanent';
@@ -131,6 +135,25 @@ export interface IPaymentConfirmationRepository {
     updatedOrder: OrderRecordForPayment | null;
     transitionedFromUnpaid: boolean;
   }>;
+
+  /**
+   * 決済成功済みだがDB上で注文がキャンセル済み（取消状態）である不整合を検知した場合に、
+   * DBトランザクション内で返金案件 (order_refund_requests) を永続化し、
+   * 注文の refund_status を 'pending'、requires_manual_attention を true に更新する
+   */
+  recordCancelledPaymentDiscrepancy?(params: {
+    orderId: string;
+    stripeSessionId: string;
+    paymentIntentId?: string;
+    amount: number;
+    currency?: string;
+    webhookEventId?: string;
+    reason?: string;
+  }): Promise<{
+    ok: boolean;
+    refundRequestId?: string;
+    alreadyRecorded?: boolean;
+  }>;
 }
 
 export type PaymentConfirmationResult =
@@ -140,6 +163,17 @@ export type PaymentConfirmationResult =
       transitionedToPending: boolean;
       orderId: string;
       currentStatus: string;
+    }
+  | {
+      ok: false;
+      code: 'CANCELLED_PAYMENT_DISCREPANCY';
+      message: string;
+      status: 409;
+      retryable: false;
+      discrepancyRecorded: boolean;
+      orderId: string;
+      stripeSessionId: string;
+      paymentIntentId?: string;
     }
   | {
       ok: false;
