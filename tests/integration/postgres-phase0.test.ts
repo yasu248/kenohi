@@ -946,7 +946,9 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
               'update_store_state_tx',
               'create_mobile_order_tx',
               'finalize_mobile_order_checkout_tx',
-              'abort_mobile_order_checkout_tx'
+              'abort_mobile_order_checkout_tx',
+              'record_cancelled_payment_discrepancy_tx',
+              'update_refund_request_status_tx'
             )
             AND has_function_privilege('anon', p.oid, 'EXECUTE') = false
             AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = false
@@ -958,12 +960,177 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
 
       assert.equal(
         restoredAclCheck,
-        '6',
-        'pg_restore 後も全6個の SECURITY DEFINER RPC関数で anon=false, authenticated=false, service_role=true が維持されていること'
+        '8',
+        'pg_restore 後も全8個の SECURITY DEFINER RPC関数で anon=false, authenticated=false, service_role=true が維持されていること'
       );
 
       // クリーンアップ
       runPsql(`DROP DATABASE IF EXISTS kenocha_restore_acl_verify;`);
+    });
+  });
+
+  describe('7. 決済取消競合RPC・返金案件永続化・二重返金防止の実PostgreSQL統合検証', () => {
+    before(() => {
+      // 最新マイグレーションを適用
+      const migrationSql = readFileSync(MIGRATION_FILE_PATH, 'utf8');
+      runPsql(migrationSql);
+    });
+
+    it('7.1 全8個のSECURITY DEFINER RPCに対する権限制御検証 (anon/authenticated拒否、service_role許可)', () => {
+      const rpcCount = runPsql(`
+        SELECT COUNT(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname IN (
+            'next_order_number',
+            'confirm_stripe_order_payment_tx',
+            'update_store_state_tx',
+            'create_mobile_order_tx',
+            'finalize_mobile_order_checkout_tx',
+            'abort_mobile_order_checkout_tx',
+            'record_cancelled_payment_discrepancy_tx',
+            'update_refund_request_status_tx'
+          )
+          AND p.prosecdef = true
+          AND p.proconfig::text LIKE '%search_path=public, pg_temp%'
+          AND has_function_privilege('anon', p.oid, 'EXECUTE') = false
+          AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = false
+          AND has_function_privilege('service_role', p.oid, 'EXECUTE') = true;
+      `);
+      assert.equal(rpcCount, '8', '8個すべてのRPCで正しいACLおよびSECURITY DEFINERが設定されていること');
+    });
+
+    it('7.2 record_cancelled_payment_discrepancy_tx による決済不整合の原子的永続化とWebhook succeeded確定', () => {
+      // キャンセル済み注文を準備
+      runPsql(`
+        INSERT INTO public.orders (
+          id, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status
+        ) VALUES (
+          'ord_pg_disc_1', '3801', 1400, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled'
+        ) ON CONFLICT (id) DO UPDATE SET status = 'cancelled', payment_status = 'unpaid', cancellation_status = 'cancelled';
+      `);
+
+      // service_role で RPC 実行
+      const rpcJson = runPsqlAsRole(
+        'service_role',
+        `SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_pg_disc_1',
+          'cs_test_pg_disc_1',
+          'pi_test_pg_disc_1',
+          1400,
+          'jpy',
+          'evt_pg_disc_1',
+          'cancelled_order_payment_received'
+        );`
+      );
+      const res = JSON.parse(rpcJson);
+      assert.equal(res.ok, true);
+      assert.equal(res.order_id, 'ord_pg_disc_1');
+      assert.equal(res.refund_request.refund_status, 'pending');
+      assert.equal(res.refund_request.requires_manual_attention, true);
+      assert.equal(res.refund_request.payment_intent_id, 'pi_test_pg_disc_1');
+
+      // DB上の orders 状態を確認（status=cancelled を維持しつつ refund_status='pending', requires_manual_attention=true）
+      const orderCheck = runPsql(`
+        SELECT status, payment_status, cancellation_status, refund_status, requires_manual_attention
+        FROM public.orders WHERE id = 'ord_pg_disc_1';
+      `);
+      assert.equal(orderCheck, 'cancelled|unpaid|cancelled|pending|t');
+
+      // Webhook イベントテーブルが同一トランザクションで succeeded になっていること
+      const evtCheck = runPsql(`
+        SELECT status FROM public.stripe_webhook_events WHERE event_id = 'evt_pg_disc_1';
+      `);
+      assert.equal(evtCheck, 'succeeded');
+    });
+
+    it('7.3 同一注文に対する record_cancelled_payment_discrepancy_tx の再送・重複防止 (ON CONFLICT 冪等性)', () => {
+      // 2回目の呼び出し（同一注文・同一イベント再送）
+      const rpcJson2 = runPsqlAsRole(
+        'service_role',
+        `SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_pg_disc_1',
+          'cs_test_pg_disc_1',
+          'pi_test_pg_disc_1',
+          1400,
+          'jpy',
+          'evt_pg_disc_1',
+          'replayed_event'
+        );`
+      );
+      const res2 = JSON.parse(rpcJson2);
+      assert.equal(res2.ok, true);
+
+      // order_refund_requests に重複行が生成されていないこと（COUNT = 1）
+      const countCheck = runPsql(`
+        SELECT COUNT(*) FROM public.order_refund_requests WHERE order_id = 'ord_pg_disc_1';
+      `);
+      assert.equal(countCheck, '1', '同一注文に対して重複レコードが作成されないこと');
+    });
+
+    it('7.4 update_refund_request_status_tx による返金完了と注文テーブルの整合性更新', () => {
+      // 返金成功を記録
+      const updateJson = runPsqlAsRole(
+        'service_role',
+        `SELECT public.update_refund_request_status_tx(
+          'ord_pg_disc_1',
+          'succeeded',
+          're_test_pg_succ_1',
+          NULL,
+          NULL,
+          true
+        );`
+      );
+      const updateRes = JSON.parse(updateJson);
+      assert.equal(updateRes.ok, true);
+      assert.equal(updateRes.refund_request.refund_status, 'succeeded');
+      assert.equal(updateRes.refund_request.requires_manual_attention, false);
+
+      // orders テーブルが payment_status='refunded', refunded_amount=1400, requires_manual_attention=false に更新されていること
+      const finalOrder = runPsql(`
+        SELECT status, payment_status, refunded_amount, refund_status, requires_manual_attention
+        FROM public.orders WHERE id = 'ord_pg_disc_1';
+      `);
+      assert.equal(finalOrder, 'cancelled|refunded|1400|succeeded|f');
+    });
+
+    it('7.5 過去注文 (legacy_undetermined) に対する返金案件登録の保護拒否', () => {
+      // 過去の cancelled 注文（payment_status / cancellation_status が NULL）
+      runPsql(`
+        INSERT INTO public.orders (
+          id, order_number, total_price, status, payment_status, cancellation_status
+        ) VALUES (
+          'ord_pg_legacy_prot_1', '1099', 1200, 'cancelled', NULL, NULL
+        ) ON CONFLICT (id) DO UPDATE SET status = 'cancelled', payment_status = NULL, cancellation_status = NULL;
+      `);
+
+      const rpcJson = runPsqlAsRole(
+        'service_role',
+        `SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_pg_legacy_prot_1',
+          'cs_test_legacy',
+          'pi_test_legacy',
+          1200,
+          'jpy'
+        );`
+      );
+      const res = JSON.parse(rpcJson);
+      assert.equal(res.ok, false);
+      assert.equal(res.code, 'LEGACY_ORDER_PROTECTED');
+
+      // order_refund_requests に案件が作られていないこと
+      const reqCount = runPsql(`
+        SELECT COUNT(*) FROM public.order_refund_requests WHERE order_id = 'ord_pg_legacy_prot_1';
+      `);
+      assert.equal(reqCount, '0');
+    });
+
+    it('7.6 マイグレーション再実行（Idempotency）の完全な安全性検証', () => {
+      const migrationSql = readFileSync(MIGRATION_FILE_PATH, 'utf8');
+      assert.doesNotThrow(() => {
+        runPsql(migrationSql);
+      }, '0001_phase0_foundation.sql は何度再実行してもエラーなく適用できること');
     });
   });
 });

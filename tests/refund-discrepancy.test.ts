@@ -225,6 +225,13 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
     const execResult = await executeOrderRefund({
       refundCase,
       stripeClient: mockStripeClient,
+      statusUpdater: async (params) => {
+        refundCase.refundStatus = params.refundStatus;
+        if (params.stripeRefundId !== undefined) refundCase.stripeRefundId = params.stripeRefundId;
+        if (params.requiresManualAttention !== undefined)
+          refundCase.requiresManualAttention = params.requiresManualAttention;
+        return { ok: true };
+      },
     });
 
     assert.equal(execResult.ok, true);
@@ -267,6 +274,12 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
     const res = await executeOrderRefund({
       refundCase,
       stripeClient: mockStripeClient,
+      statusUpdater: async (params) => {
+        refundCase.refundStatus = params.refundStatus;
+        if (params.requiresManualAttention !== undefined)
+          refundCase.requiresManualAttention = params.requiresManualAttention;
+        return { ok: true };
+      },
     });
 
     assert.equal(res.ok, true);
@@ -305,6 +318,12 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
     const res = await executeOrderRefund({
       refundCase,
       stripeClient: mockStripeClient,
+      statusUpdater: async (params) => {
+        refundCase.refundStatus = params.refundStatus;
+        if (params.requiresManualAttention !== undefined)
+          refundCase.requiresManualAttention = params.requiresManualAttention;
+        return { ok: true };
+      },
     });
 
     assert.equal(res.ok, false);

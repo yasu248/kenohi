@@ -71,7 +71,7 @@ export async function executeOrderRefund(params: {
 
   const paymentIntentId = refundCase.paymentIntentId;
   if (!paymentIntentId) {
-    await updateRefundRequestStatus({
+    await statusUpdater({
       orderId: refundCase.orderId,
       refundStatus: 'failed',
       lastError: 'MISSING_PAYMENT_INTENT: payment_intent_id が記録されていません',
@@ -92,7 +92,7 @@ export async function executeOrderRefund(params: {
     if (pi.amount_refunded && pi.amount_refunded >= refundCase.targetRefundAmount) {
       // すでに Stripe 側で返金完了済みだった場合
       const existingRefundId = pi.refunds?.data?.[0]?.id;
-      await updateRefundRequestStatus({
+      await statusUpdater({
         orderId: refundCase.orderId,
         refundStatus: 'succeeded',
         stripeRefundId: existingRefundId,
@@ -118,7 +118,7 @@ export async function executeOrderRefund(params: {
   const idempotencyKey = `kenocha_refund_${refundCase.orderId}`;
 
   // 実行中状態 (processing) に更新
-  await updateRefundRequestStatus({
+  await statusUpdater({
     orderId: refundCase.orderId,
     refundStatus: 'processing',
     incrementAttempt: true,
@@ -135,7 +135,7 @@ export async function executeOrderRefund(params: {
     );
 
     // 成功記録
-    await updateRefundRequestStatus({
+    await statusUpdater({
       orderId: refundCase.orderId,
       refundStatus: 'succeeded',
       stripeRefundId: refund.id,
@@ -162,7 +162,7 @@ export async function executeOrderRefund(params: {
         const recheckPi = await stripeClient.paymentIntents.retrieve(paymentIntentId);
         if (recheckPi.amount_refunded && recheckPi.amount_refunded >= refundCase.targetRefundAmount) {
           const recoveredRefundId = recheckPi.refunds?.data?.[0]?.id;
-          await updateRefundRequestStatus({
+          await statusUpdater({
             orderId: refundCase.orderId,
             refundStatus: 'succeeded',
             stripeRefundId: recoveredRefundId,
@@ -184,7 +184,7 @@ export async function executeOrderRefund(params: {
 
     // 5. 永続的な失敗時は管理者対応 (requires_manual_attention = true) に切り替えて記録
     const errMsg = err instanceof Error ? err.message : 'Unknown refund error';
-    await updateRefundRequestStatus({
+    await statusUpdater({
       orderId: refundCase.orderId,
       refundStatus: 'failed',
       lastError: errMsg,
