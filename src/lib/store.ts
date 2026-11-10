@@ -233,6 +233,166 @@ export async function addOrder(
   return toOrder(data as OrderDbRow);
 }
 
+export type AtomicMobileOrderCreationResult =
+  | { ok: true; order: Order }
+  | {
+      ok: false;
+      code: 'STORE_STATE_UNAVAILABLE' | 'STORE_CLOSED' | 'ITEM_SOLD_OUT';
+      message: string;
+      soldOutId?: string;
+    };
+
+/**
+ * 店舗状態（開店・営業時間・欠品）の確認、注文番号採番 (`next_order_number`)、および未決済注文 INSERT を
+ * 単一のDBトランザクション (`create_mobile_order_tx`) で原子的に実行する。
+ */
+export async function createMobileOrderAtomically(params: {
+  items: OrderItem[];
+  customerName: string;
+  customerAvatar?: string;
+  itemIds: string[];
+  storeId?: string;
+  now?: Date;
+}): Promise<AtomicMobileOrderCreationResult> {
+  const storeId = params.storeId || 'kenocha_main';
+  const orderId = Math.random().toString(36).substring(2, 11);
+  const totalPrice = params.items.reduce(
+    (sum, item) => sum + item.price * item.quantity,
+    0
+  );
+
+  const { data, error } = await supabase.rpc('create_mobile_order_tx', {
+    p_store_id: storeId,
+    p_order_id: orderId,
+    p_items: params.items,
+    p_total_price: totalPrice,
+    p_customer_name: params.customerName,
+    p_customer_avatar: params.customerAvatar ?? null,
+    p_item_ids: params.itemIds,
+    p_now: (params.now ?? new Date()).toISOString(),
+  });
+
+  if (error) {
+    throw new Error(`createMobileOrderAtomically: ${error.message}`);
+  }
+
+  const rpcResult = data as {
+    ok?: boolean;
+    code?: 'STORE_STATE_UNAVAILABLE' | 'STORE_CLOSED' | 'ITEM_SOLD_OUT';
+    message?: string;
+    sold_out_id?: string;
+    order?: OrderDbRow;
+  } | null;
+
+  if (!rpcResult || !rpcResult.ok || !rpcResult.order) {
+    return {
+      ok: false,
+      code: rpcResult?.code || 'STORE_STATE_UNAVAILABLE',
+      message:
+        rpcResult?.message ||
+        '現在、店舗の受付状態を確認できないため注文を受け付けられません。',
+      soldOutId: rpcResult?.sold_out_id,
+    };
+  }
+
+  return {
+    ok: true,
+    order: toOrder(rpcResult.order),
+  };
+}
+
+export type FinalizeMobileOrderCheckoutResult =
+  | { ok: true; order: Order }
+  | {
+      ok: false;
+      code: 'STORE_STATE_UNAVAILABLE' | 'STORE_CLOSED' | 'ITEM_SOLD_OUT' | 'ORDER_NOT_FOUND';
+      message: string;
+      soldOutId?: string;
+      orderCancelled: boolean;
+    };
+
+/**
+ * Stripe Checkout セッション発行直後に、同じ排他制御 (`store_state` ロック) 下で店舗状態を再確認し、
+ * 営業中であれば `stripe_session_id` を記録、受付停止・欠品化されていた場合は未決済注文を中断キャンセルする。
+ */
+export async function finalizeMobileOrderCheckout(params: {
+  orderId: string;
+  stripeSessionId: string;
+  itemIds: string[];
+  storeId?: string;
+  now?: Date;
+}): Promise<FinalizeMobileOrderCheckoutResult> {
+  const storeId = params.storeId || 'kenocha_main';
+  const { data, error } = await supabase.rpc('finalize_mobile_order_checkout_tx', {
+    p_store_id: storeId,
+    p_order_id: params.orderId,
+    p_stripe_session_id: params.stripeSessionId,
+    p_item_ids: params.itemIds,
+    p_now: (params.now ?? new Date()).toISOString(),
+  });
+
+  if (error) {
+    throw new Error(`finalizeMobileOrderCheckout: ${error.message}`);
+  }
+
+  const rpcResult = data as {
+    ok?: boolean;
+    code?: 'STORE_STATE_UNAVAILABLE' | 'STORE_CLOSED' | 'ITEM_SOLD_OUT' | 'ORDER_NOT_FOUND';
+    message?: string;
+    sold_out_id?: string;
+    order_cancelled?: boolean;
+    order?: OrderDbRow;
+  } | null;
+
+  if (!rpcResult || !rpcResult.ok || !rpcResult.order) {
+    return {
+      ok: false,
+      code: rpcResult?.code || 'STORE_STATE_UNAVAILABLE',
+      message:
+        rpcResult?.message ||
+        '店舗状態の確認中にエラーが発生したため、注文を中断しました。',
+      soldOutId: rpcResult?.sold_out_id,
+      orderCancelled: Boolean(rpcResult?.order_cancelled),
+    };
+  }
+
+  return {
+    ok: true,
+    order: toOrder(rpcResult.order),
+  };
+}
+
+/**
+ * 未決済の Checkout 注文のみを安全に中断キャンセルする（決済済み注文は絶対にキャンセル・削除しない）
+ */
+export async function abortMobileOrderCheckout(params: {
+  orderId: string;
+  stripeSessionId?: string;
+  reason?: string;
+}): Promise<{ ok: boolean; code?: string; cancelled?: boolean }> {
+  const { data, error } = await supabase.rpc('abort_mobile_order_checkout_tx', {
+    p_order_id: params.orderId,
+    p_stripe_session_id: params.stripeSessionId ?? null,
+    p_reason: params.reason ?? 'checkout_aborted',
+  });
+
+  if (error) {
+    throw new Error(`abortMobileOrderCheckout: ${error.message}`);
+  }
+
+  const rpcResult = data as {
+    ok?: boolean;
+    code?: string;
+    cancelled?: boolean;
+  } | null;
+
+  return {
+    ok: Boolean(rpcResult?.ok),
+    code: rpcResult?.code,
+    cancelled: Boolean(rpcResult?.cancelled),
+  };
+}
+
 /**
  * 注文のステータスを更新する（キッチン画面のボタン操作）
  * Phase 0-C: 受渡完了 (`hand_over`) と本当の注文取消 (`cancel_order`) を明確に区別して保存する
@@ -644,7 +804,29 @@ export async function getStoreState(): Promise<StoreState | null> {
   }
 }
 
-export async function setStoreState(state: StoreState): Promise<void> {
+export async function setStoreState(
+  state: StoreState,
+  storeId: string = 'kenocha_main'
+): Promise<void> {
+  // Phase 0: 注文作成・Checkout確定と同じ排他制御ロック (`store_state`) に参加する RPC を優先使用
+  const { error: rpcError } = await supabase.rpc('update_store_state_tx', {
+    p_store_id: storeId,
+    p_state_json: state,
+  });
+
+  if (!rpcError) {
+    return;
+  }
+
+  // マイグレーション適用前の互換フォールバック（関数未定義時のみ）
+  if (
+    rpcError.code !== '42883' &&
+    rpcError.code !== 'PGRST202' &&
+    !rpcError.message.includes('update_store_state_tx')
+  ) {
+    throw new Error(`setStoreState(rpc): ${rpcError.message}`);
+  }
+
   const row = {
     id: STORE_STATE_ID,
     items: [],

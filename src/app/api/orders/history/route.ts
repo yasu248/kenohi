@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authorizeStaffRequest } from '../../../../lib/auth';
 import { supabaseAuthPersistenceStore, toOrder } from '../../../../lib/store';
+import { shouldIncludeOrderInSalesHistory } from '../../../../lib/orderStatus';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
       .select('*')
       .neq('id', 'STORE_STATE_001')
       .neq('status', 'unpaid') // 未決済は除外
+      .or('payment_status.is.null,payment_status.in.(paid,partially_refunded,refunded)') // 決済前に中断された注文 (payment_status=unpaid/failed) を除外しつつ過去データ (NULL) を保持
       .gte('created_at', startDateISO)
       .order('created_at', { ascending: false });
 
@@ -41,7 +43,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const orders = (data ?? []).map((row) => toOrder(row));
+    const orders = (data ?? [])
+      .map((row) => toOrder(row))
+      .filter((order) => shouldIncludeOrderInSalesHistory(order));
 
     return NextResponse.json(orders);
   } catch (error) {

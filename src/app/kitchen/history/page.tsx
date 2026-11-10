@@ -22,6 +22,7 @@ import styles from './history.module.css';
 import {
   calculateSalesMetrics,
   resolveOrderDomainState,
+  shouldIncludeOrderInSalesHistory,
   type PaymentStatus,
   type ProductionStatus,
   type FulfillmentStatus,
@@ -172,6 +173,9 @@ export default function HistoryPage() {
 
     // 取得した注文データを各日付に割り当て
     rawOrders.forEach((order) => {
+      if (!shouldIncludeOrderInSalesHistory(order)) {
+        return;
+      }
       const orderDate = new Date(order.createdAt);
       const dJST = new Date(orderDate.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
       const dateKey = `${dJST.getFullYear()}-${String(dJST.getMonth() + 1).padStart(2, '0')}-${String(dJST.getDate()).padStart(2, '0')}`;

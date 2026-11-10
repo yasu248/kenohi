@@ -401,3 +401,38 @@ export function calculateSalesMetrics(
 
   return summary;
 }
+
+/**
+ * 売上履歴画面 (`/kitchen/history`) および `GET /api/orders/history` に含めるべき注文かを判定する。
+ * - `status !== 'unpaid'` のみに依存せず、4軸の `paymentStatus` と過去データ互換性 (`legacy_undetermined`) を用いて判定する。
+ * - 決済完了前に中断・キャンセルされた注文 (`paymentStatus === 'unpaid'` または `'failed'`) は売上履歴から除外する。
+ * - 過去データ (`status === 'cancelled'` かつ `payment_status IS NULL`) は `resolveOrderDomainState` により
+ *   `legacyClassification === 'legacy_undetermined'`, `paymentStatus === 'paid'` として解決されるため、誤って未決済扱いされず保持される。
+ */
+export function shouldIncludeOrderInSalesHistory(raw: {
+  status: LegacyOrderStatus | string;
+  paymentStatus?: PaymentStatus | string | null;
+  productionStatus?: ProductionStatus | string | null;
+  fulfillmentStatus?: FulfillmentStatus | string | null;
+  cancellationStatus?: CancellationStatus | string | null;
+  refundedAmount?: number | null;
+}): boolean {
+  if (raw.status === 'unpaid') {
+    return false;
+  }
+
+  const domain = resolveOrderDomainState({
+    status: raw.status,
+    payment_status: raw.paymentStatus,
+    production_status: raw.productionStatus,
+    fulfillment_status: raw.fulfillmentStatus,
+    cancellation_status: raw.cancellationStatus,
+    refunded_amount: raw.refundedAmount,
+  });
+
+  if (domain.paymentStatus === 'unpaid' || domain.paymentStatus === 'failed') {
+    return false;
+  }
+
+  return true;
+}
