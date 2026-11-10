@@ -45,12 +45,20 @@ FROM public.orders
 WHERE id = 'STORE_STATE_001';
 ```
 
-### 手順 3. 処理中Checkout・決済・Webhookの確認（残存時は移行保留）
-- 以下の SQL を実行し、**調理中・呼出中の注文（`pending` / `preparing` / `completed`）** および **進行中の Checkout（`status = 'unpaid'` かつ未キャンセル）** が 0 件であることを確認します。
-- **判定基準（移行保留条件）:**
-  1. `checkout_session_creating`（`status = 'unpaid'` かつ `stripe_session_id IS NULL`）が 1 件でもある場合：現在 Stripe API と通信中のリクエストが存在するため、完了または自動中断されるまで待機し、**メンテナンス移行を保留**します。
-  2. `checkout_awaiting_payment`（`status = 'unpaid'` かつ `stripe_session_id IS NOT NULL`、直近30分以内）が 1 件でもある場合：受付停止前に決済画面へ遷移した顧客が決済操作中の可能性があるため、決済完了またはセッション失効が確認できるまで**メンテナンス移行を保留**します。
-- Stripe Dashboard（Developers > Webhooks）を開き、送信中（Pending / Retrying）の `checkout.session.completed` イベントが存在しないことを確認します。
+### 手順 3. 処理中Checkoutの明示的失効・決済完了照合・完全排出確認（残存時は移行保留）
+- **重要原則:** 単に待機（15分〜30分待機）するだけでは、Stripe Checkout Session の有効期限（最長24時間）により未決済セッションが残存するリスクがあります。そのため、**①未完了セッションの明示的失効（Expire）、②決済成功済み・Webhook未着の照合（Reconciliation）、③DB上の未決済Checkoutゼロ件確認** の3段階を必須とします。
+
+1. **未完了 Checkout Session の明示的失効（Stripe Expire）と中断キャンセル:**
+   - 以下の SQL で直近の未決済セッション（`status = 'unpaid'` かつ `stripe_session_id IS NOT NULL`）を抽出します。
+   - 抽出された各セッションに対し、Stripe CLI または管理スクリプトから `stripe checkout sessions expire <session_id>` を実行して決済受付を即時失効させます。
+   - 続いて `abort_mobile_order_checkout_tx` を実行し、DB上の注文を安全に `cancelled` へ遷移させます。
+
+2. **決済成功済み・Webhook未着セッションの照合（Reconciliation）:**
+   - Stripe Dashboard（または Stripe API）で直近1時間の `checkout.session.completed` イベントを確認し、DB上で `unpaid` または `cancelled` のままになっている注文がないかを照合します。
+   - 万が一「Stripe決済成功済みだがDB未反映」の注文を発見した場合は、`confirm_stripe_order_payment_tx` で決済を確定するか、取消済みの場合は `record_cancelled_payment_discrepancy_tx` で返金案件キューへ安全に永続化します。
+
+3. **完全排出の検証クエリ（全件 0 件であることを確認）:**
+   - 以下の SQL を実行し、**調理中・呼出中の注文（`active_kitchen_order`）**、**セッション発行中（`checkout_session_creating`）**、および **決済待ち（`checkout_awaiting_payment`）** が **すべて 0 件** であることを確認します。1件でも残存している場合は**メンテナンス移行を保留**します。
 
 ```sql
 -- 進行中の調理・呼出注文、および処理中 Checkout の検知クエリ（結果が 0 件であることを確認）
@@ -60,6 +68,7 @@ SELECT
   status,
   COALESCE(payment_status, 'unpaid') AS payment_status,
   COALESCE(cancellation_status, 'active') AS cancellation_status,
+  COALESCE(refund_status, 'none') AS refund_status,
   stripe_session_id,
   CASE
     WHEN status IN ('pending', 'preparing', 'completed') THEN 'active_kitchen_order'
@@ -76,7 +85,6 @@ WHERE id <> 'STORE_STATE_001'
     OR (
       status = 'unpaid'
       AND COALESCE(cancellation_status, 'active') = 'active'
-      AND created_at >= NOW() - INTERVAL '30 minutes'
     )
   )
 ORDER BY created_at DESC;
@@ -152,7 +160,7 @@ FROM public.orders;
 
 ### 手順 6. マイグレーション適用とRPC権限制御（ACL）検証
 - 手順5でバックアップの復元可能性が確認できた後、Supabase SQL Editor で `supabase/migrations/0001_phase0_foundation.sql` を実行します。
-- カラム追加、CHECK制約、新設4テーブル（`order_number_sequences`, `stripe_webhook_events`, `auth_sessions`, `auth_login_rate_limits`）、および全6個のRPC関数（`next_order_number`, `confirm_stripe_order_payment_tx`, `update_store_state_tx`, `create_mobile_order_tx`, `finalize_mobile_order_checkout_tx`, `abort_mobile_order_checkout_tx`）とそれらの実行権限が正常に適用されたことを確認します。
+- カラム追加、CHECK制約、新設5テーブル（`order_number_sequences`, `stripe_webhook_events`, `order_refund_requests`, `auth_sessions`, `auth_login_rate_limits`）、および全8個のRPC関数（`next_order_number`, `confirm_stripe_order_payment_tx`, `update_store_state_tx`, `create_mobile_order_tx`, `finalize_mobile_order_checkout_tx`, `abort_mobile_order_checkout_tx`, `record_cancelled_payment_discrepancy_tx`, `update_refund_request_status_tx`）とそれらの実行権限が正常に適用されたことを確認します。
 - **重要（運用開始禁止条件）:** 下記の「3. RPC関数の実行権限確認」において、1つでも `anon_can_exec = true` または `auth_can_exec = true` または `service_role_can_exec = false` となった場合は、**絶対に運用を開始せず（運用開始禁止）**、権限剥奪・付与SQLを再適用してください（バックアップからのリストア後も同じクエリで必ず検証します）。
 
 ```sql
@@ -164,7 +172,8 @@ WHERE table_schema = 'public'
   AND column_name IN (
     'store_id', 'source', 'external_order_id', 'payment_status',
     'production_status', 'fulfillment_status', 'cancellation_status',
-    'refunded_amount', 'stripe_session_id', 'updated_at'
+    'refunded_amount', 'refund_status', 'requires_manual_attention',
+    'stripe_session_id', 'updated_at'
   );
 
 -- 2. 過去の cancelled レコードが推測で書き換えられず NULL (legacy_undetermined) で保持されていることの確認
@@ -173,7 +182,7 @@ FROM public.orders
 WHERE id <> 'STORE_STATE_001'
 GROUP BY status, payment_status, production_status, fulfillment_status, cancellation_status;
 
--- 3. 全6個のRPC関数の実行権限・SECURITY DEFINER・search_path 確認
+-- 3. 全8個のRPC関数の実行権限・SECURITY DEFINER・search_path 確認
 --    （全行で anon_can_exec = false, auth_can_exec = false, service_role_can_exec = true であること）
 SELECT
   p.proname,
@@ -191,7 +200,9 @@ WHERE n.nspname = 'public'
     'update_store_state_tx',
     'create_mobile_order_tx',
     'finalize_mobile_order_checkout_tx',
-    'abort_mobile_order_checkout_tx'
+    'abort_mobile_order_checkout_tx',
+    'record_cancelled_payment_discrepancy_tx',
+    'update_refund_request_status_tx'
   )
 ORDER BY p.proname;
 ```
