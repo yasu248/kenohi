@@ -87,19 +87,27 @@ export function resolveOrderDomainState(row: {
   const refundedAmount = typeof row.refunded_amount === 'number' ? Math.max(0, row.refunded_amount) : 0;
 
   const hasExplicitFourAxis = Boolean(
-    row.payment_status &&
-      row.production_status &&
-      row.fulfillment_status &&
+    row.payment_status ||
+      row.production_status ||
+      row.fulfillment_status ||
       row.cancellation_status
   );
 
   if (hasExplicitFourAxis) {
     return {
       status: legacyStatus,
-      paymentStatus: row.payment_status as PaymentStatus,
-      productionStatus: row.production_status as ProductionStatus,
-      fulfillmentStatus: row.fulfillment_status as FulfillmentStatus,
-      cancellationStatus: row.cancellation_status as CancellationStatus,
+      paymentStatus: (row.payment_status as PaymentStatus) || (legacyStatus === 'unpaid' ? 'unpaid' : 'paid'),
+      productionStatus:
+        (row.production_status as ProductionStatus) ||
+        (legacyStatus === 'preparing'
+          ? 'preparing'
+          : legacyStatus === 'completed' || legacyStatus === 'cancelled'
+            ? 'ready'
+            : 'pending'),
+      fulfillmentStatus:
+        (row.fulfillment_status as FulfillmentStatus) || 'not_handed_over',
+      cancellationStatus:
+        (row.cancellation_status as CancellationStatus) || 'active',
       legacyClassification: 'four_axis_explicit',
       refundedAmount,
       source,

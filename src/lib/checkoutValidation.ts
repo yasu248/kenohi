@@ -1,39 +1,35 @@
 import { isBusinessHours, isStoreCurrentlyOpen } from './businessHours.ts';
-import type { Order, OrderItem, StoreState } from './store.ts';
+import {
+  MENU_CATALOG,
+  MENU_NAME_BY_ID,
+  VALID_ICE_OPTIONS,
+  VALID_JELLY_OPTIONS,
+  VALID_SWEETNESS_OPTIONS,
+  type MenuCatalogItem,
+} from './menuCatalog.ts';
+import type {
+  AtomicMobileOrderCreationResult,
+  FinalizeMobileOrderCheckoutResult,
+  Order,
+  OrderItem,
+  StoreState,
+} from './store.ts';
+
+export { MENU_CATALOG, MENU_NAME_BY_ID };
+export type MenuCatalogEntry = MenuCatalogItem;
 
 /**
- * Phase 0: モバイル注文 Checkout サーバーサイドガード & 商品・価格・欠品検証モジュール
+ * Phase 0: モバイル注文 Checkout サーバーサイドガード & 商品・価格・欠品・競合制御モジュール
  *
  * 要件:
- * 1. 手動受付停止 (`isManualOpen: false`) および営業時間外 (`isStoreCurrentlyOpen === false`) の注文をサーバー側で確実に拒否する
+ * 1. 手動受付停止 (`isManualOpen: false`) および営業時間外 (`isStoreCurrentlyOpen === false`) の注文をサーバー側・DB側の双方で確実に拒否する
  * 2. 店舗状態が取得できない場合（DBエラー・null・未初期化）は安全側（フェイルクローズ）に倒して新規受付を拒否する
- * 3. 商品ID (`s1`〜`s5`, `m1`〜`m6`)・商品名・オプション（ゼリー・甘さ・氷）・単価・合計金額をサーバー側マスターで厳格に検証する
+ * 3. 商品ID (`s1`〜`s5`, `m1`〜`m6`)・商品名・オプション（ゼリー・甘さ・氷）・単価・合計金額をサーバー側共通マスター (`MENU_CATALOG`) で厳格に検証する
  * 4. 欠品商品 (`soldOutItems`) を商品ID (`s1`〜`m6`) で厳密に照合して拒否する
- * 5. 受付状態確認直後にスタッフが受付停止した場合の競合（TOCTOU）に対し、注文レコード作成直後・Stripeセッション発行前にも
- *    店舗状態を再確認し、停止されていた場合は注文を即座に取消して Stripe Checkout セッションを発行しない
+ * 5. DBトランザクション (`create_mobile_order_tx`) により、受付確認・注文番号採番・注文INSERTを `store_state` 排他制御下で直列化する
+ * 6. Stripe API 呼び出し中は DB ロックを保持せず、Stripe Checkout セッション発行直後に再度 `finalize_mobile_order_checkout_tx`（または店舗状態再確認）を実行し、
+ *    セッション発行中に受付停止された場合は未決済注文を中断キャンセルしたうえで `stripe.checkout.sessions.expire` をリトライ付きで実行する
  */
-
-export interface MenuCatalogEntry {
-  id: string;
-  name: string;
-  price: number;
-  category: 'straight' | 'milk' | 'soda';
-  allowZeroSweetness: boolean;
-}
-
-export const MENU_CATALOG: readonly MenuCatalogEntry[] = [
-  { id: 's1', name: '本日のお茶', price: 250, category: 'straight', allowZeroSweetness: true },
-  { id: 's2', name: '緑茶', price: 250, category: 'straight', allowZeroSweetness: true },
-  { id: 's3', name: '釜炒り緑茶', price: 250, category: 'straight', allowZeroSweetness: true },
-  { id: 's4', name: '青茶', price: 250, category: 'straight', allowZeroSweetness: true },
-  { id: 's5', name: 'ほうじ茶', price: 250, category: 'straight', allowZeroSweetness: true },
-  { id: 'm1', name: '緑茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: true },
-  { id: 'm2', name: '釜炒り緑茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: true },
-  { id: 'm3', name: '青茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: true },
-  { id: 'm4', name: 'ほうじ茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: true },
-  { id: 'm5', name: '金木犀青茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: false },
-  { id: 'm6', name: '薔薇ほうじ茶ミルクティー', price: 400, category: 'milk', allowZeroSweetness: false },
-] as const;
 
 const CATALOG_BY_ID = new Map<string, MenuCatalogEntry>(
   MENU_CATALOG.map((item) => [item.id, item])
@@ -43,9 +39,9 @@ const CATALOG_BY_NAME = new Map<string, MenuCatalogEntry>(
   MENU_CATALOG.map((item) => [item.name, item])
 );
 
-const VALID_JELLY_OPTIONS = new Set(['あり', 'なし']);
-const VALID_SWEETNESS_OPTIONS = new Set(['普通', '控えめ', 'なし']);
-const VALID_ICE_OPTIONS = new Set(['氷あり', '氷なし']);
+const VALID_JELLY_SET = new Set<string>(VALID_JELLY_OPTIONS);
+const VALID_SWEETNESS_SET = new Set<string>(VALID_SWEETNESS_OPTIONS);
+const VALID_ICE_SET = new Set<string>(VALID_ICE_OPTIONS);
 
 export interface CheckoutItemInput {
   id?: string;
@@ -148,7 +144,8 @@ export function validateCheckoutRequest(params: {
     return {
       ok: false,
       code: 'STORE_STATE_UNAVAILABLE',
-      message: '現在、店舗の受付状態を確認できないため注文を受け付けられません。しばらくしてから再度お試しください。',
+      message:
+        '現在、店舗の受付状態を確認できないため注文を受け付けられません。しばらくしてから再度お試しください。',
       status: 503,
     };
   }
@@ -262,7 +259,7 @@ export function validateCheckoutRequest(params: {
     const iceVal =
       typeof rawItem.ice === 'string' ? rawItem.ice : parsedOptions?.ice;
 
-    if (jellyVal !== undefined && !VALID_JELLY_OPTIONS.has(jellyVal)) {
+    if (jellyVal !== undefined && !VALID_JELLY_SET.has(jellyVal)) {
       return {
         ok: false,
         code: 'INVALID_ITEM_OPTIONS',
@@ -270,7 +267,7 @@ export function validateCheckoutRequest(params: {
         status: 400,
       };
     }
-    if (sweetnessVal !== undefined && !VALID_SWEETNESS_OPTIONS.has(sweetnessVal)) {
+    if (sweetnessVal !== undefined && !VALID_SWEETNESS_SET.has(sweetnessVal)) {
       return {
         ok: false,
         code: 'INVALID_ITEM_OPTIONS',
@@ -286,7 +283,7 @@ export function validateCheckoutRequest(params: {
         status: 400,
       };
     }
-    if (iceVal !== undefined && !VALID_ICE_OPTIONS.has(iceVal)) {
+    if (iceVal !== undefined && !VALID_ICE_SET.has(iceVal)) {
       return {
         ok: false,
         code: 'INVALID_ITEM_OPTIONS',
@@ -365,20 +362,104 @@ export interface ICheckoutExecutionDependencies {
     customerName: string,
     customerAvatar?: string
   ) => Promise<Order>;
-  cancelOrderOnAbort: (orderId: string) => Promise<void>;
+  /**
+   * DBトランザクション内で `store_state` ロック取得・開店/営業時間/欠品検証・注文番号採番・注文INSERTを
+   * 原子的に実行するオプション関数 (`create_mobile_order_tx` RPC)
+   */
+  createMobileOrderAtomically?: (params: {
+    items: OrderItem[];
+    customerName: string;
+    customerAvatar?: string;
+    itemIds: string[];
+    now?: Date;
+  }) => Promise<AtomicMobileOrderCreationResult>;
+  /**
+   * Stripe セッション発行直後に `store_state` ロック下で受付状態を再確認し、
+   * 営業中なら `stripe_session_id` を記録、停止中なら未決済注文を中断キャンセルするオプション関数 (`finalize_mobile_order_checkout_tx` RPC)
+   */
+  finalizeCheckoutSession?: (params: {
+    orderId: string;
+    stripeSessionId: string;
+    itemIds: string[];
+    now?: Date;
+  }) => Promise<FinalizeMobileOrderCheckoutResult>;
+  cancelOrderOnAbort: (
+    orderId: string,
+    stripeSessionId?: string,
+    reason?: string
+  ) => Promise<void>;
   createStripeCheckoutSession: (params: {
     order: Order;
     items: ValidatedCheckoutItem[];
     origin: string;
-  }) => Promise<{ url: string | null }>;
+  }) => Promise<{ id?: string; url: string | null }>;
+  /**
+   * Stripe Checkout セッション発行後に受付停止等が判明した場合、Stripe側のセッションを即座に失効 (`expire`) する関数
+   */
+  expireStripeCheckoutSession?: (sessionId: string) => Promise<void>;
+  /**
+   * キャンセル処理または Stripe セッション失効処理が失敗した際の最大試行回数（デフォルト: 3）
+   */
+  maxRetryAttempts?: number;
+}
+
+async function cancelOrderWithRetry(
+  deps: ICheckoutExecutionDependencies,
+  orderId: string,
+  stripeSessionId?: string,
+  reason: string = 'checkout_aborted'
+): Promise<{ cancelled: boolean; attempts: number; errorMessage?: string }> {
+  const maxAttempts = Math.max(1, deps.maxRetryAttempts ?? 3);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await deps.cancelOrderOnAbort(orderId, stripeSessionId, reason);
+      return { cancelled: true, attempts: attempt };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  const errorMessage = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  console.error(
+    `[CheckoutGuard][CRITICAL][CANCEL_ORDER_FAILED] orderId=${orderId} sessionId=${stripeSessionId ?? 'none'} reason=${reason} attempts=${maxAttempts} error=${errorMessage}`
+  );
+  return { cancelled: false, attempts: maxAttempts, errorMessage };
+}
+
+async function expireSessionWithRetry(
+  deps: ICheckoutExecutionDependencies,
+  orderId: string,
+  sessionId: string | undefined,
+  reason: string
+): Promise<{ expired: boolean; attempts: number; errorMessage?: string }> {
+  if (!sessionId || !deps.expireStripeCheckoutSession) {
+    return { expired: false, attempts: 0 };
+  }
+  const maxAttempts = Math.max(1, deps.maxRetryAttempts ?? 3);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await deps.expireStripeCheckoutSession(sessionId);
+      return { expired: true, attempts: attempt };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  const errorMessage = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  console.error(
+    `[CheckoutGuard][CRITICAL][STRIPE_SESSION_EXPIRE_FAILED] orderId=${orderId} sessionId=${sessionId} reason=${reason} attempts=${maxAttempts} error=${errorMessage}`
+  );
+  return { expired: false, attempts: maxAttempts, errorMessage };
 }
 
 /**
  * 競合対策付き Checkout 実行関数:
- * 1. 事前検証（開店状態・欠品・商品ID・価格）をパスした場合のみ注文レコードを作成
- * 2. 注文作成直後・Stripe Checkout セッション発行前に再度 `getStoreState()` を確認し、
- *    万が一注文作成とほぼ同時にスタッフが受付停止（または対象商品を欠品化）していた場合は、
- *    作成した未決済注文を即座にキャンセル (`cancelOrderOnAbort`) し、Stripe セッションを発行せず 503/409 で停止する。
+ * - Step 1/2: 事前検証（店舗状態・営業時間・欠品・商品ID・オプション・価格）
+ * - Step 3: DBトランザクション #1 (`createMobileOrderAtomically` または `addOrder` + 再検証) による未決済注文作成（DBロックはここで一旦解放）
+ * - Step 4: Stripe Checkout セッションの発行（外部API通信中、DBロックは保持しない）
+ * - Step 5: DBトランザクション #2 (`finalizeCheckoutSession` および店舗状態再確認) により、
+ *   Stripe通信中にスタッフが受付停止または欠品更新を行っていないか確認。
+ *   停止・欠品化されていた場合は、未決済注文をキャンセルし、作成した Stripe セッションを `expire`（リトライ・記録付き）して 503/409 で遮断する。
  */
 export async function executeGuardedCheckout(params: {
   body: {
@@ -391,8 +472,21 @@ export async function executeGuardedCheckout(params: {
   deps: ICheckoutExecutionDependencies;
   now?: Date;
 }): Promise<
-  | { ok: true; url: string; orderId: string; orderNumber: string }
-  | { ok: false; code: CheckoutRejectionCode | 'SESSION_CREATION_FAILED'; message: string; status: 400 | 409 | 500 | 503 }
+  | {
+      ok: true;
+      url: string;
+      sessionId?: string;
+      orderId: string;
+      orderNumber: string;
+    }
+  | {
+      ok: false;
+      code: CheckoutRejectionCode | 'SESSION_CREATION_FAILED';
+      message: string;
+      status: 400 | 409 | 500 | 503;
+      sessionExpired?: boolean;
+      orderCancelled?: boolean;
+    }
 > {
   const { body, origin, deps, now } = params;
 
@@ -421,7 +515,6 @@ export async function executeGuardedCheckout(params: {
     return validation;
   }
 
-  // Step 3: 未決済注文レコードの登録
   const orderItemsForDb: OrderItem[] = validation.sanitizedItems.map((item) => ({
     id: item.id,
     name: item.name,
@@ -431,62 +524,259 @@ export async function executeGuardedCheckout(params: {
     ...(item.sweetness !== undefined ? { sweetness: item.sweetness } : {}),
     ...(item.ice !== undefined ? { ice: item.ice } : {}),
   }));
+  const itemIds = validation.sanitizedItems.map((item) => item.id);
 
-  const createdOrder = await deps.addOrder(
-    orderItemsForDb,
-    validation.customerName,
-    validation.customerAvatar
-  );
+  // Step 3: 未決済注文レコードの登録
+  let createdOrder: Order;
 
-  // Step 4: 競合防止（TOCTOU対策）— 注文作成中にスタッフが受付停止または欠品変更を行ったか再確認
-  let postOrderStoreState: StoreState | null = null;
+  if (deps.createMobileOrderAtomically) {
+    let atomicResult: AtomicMobileOrderCreationResult;
+    try {
+      atomicResult = await deps.createMobileOrderAtomically({
+        items: orderItemsForDb,
+        customerName: validation.customerName,
+        customerAvatar: validation.customerAvatar,
+        itemIds,
+        now,
+      });
+    } catch (err) {
+      console.error('[CheckoutGuard] createMobileOrderAtomically failed:', err);
+      return {
+        ok: false,
+        code: 'STORE_STATE_UNAVAILABLE',
+        message: '現在、店舗の受付状態を確認できないため注文を受け付けられません。',
+        status: 503,
+      };
+    }
+
+    if (!atomicResult.ok) {
+      return {
+        ok: false,
+        code: atomicResult.code,
+        message: atomicResult.message,
+        status: atomicResult.code === 'ITEM_SOLD_OUT' ? 409 : 503,
+      };
+    }
+    createdOrder = atomicResult.order;
+  } else {
+    createdOrder = await deps.addOrder(
+      orderItemsForDb,
+      validation.customerName,
+      validation.customerAvatar
+    );
+
+    // Step 3B: addOrder 使用時の注文作成直後チェック（Stripe API 呼び出し前）
+    let postOrderStoreState: StoreState | null = null;
+    try {
+      postOrderStoreState = await deps.getStoreState();
+    } catch (err) {
+      console.error('[CheckoutGuard] Post-order store state check failed, aborting order:', err);
+      const cancelRes = await cancelOrderWithRetry(
+        deps,
+        createdOrder.id,
+        undefined,
+        'post_order_state_check_failed'
+      );
+      return {
+        ok: false,
+        code: 'STORE_STATE_UNAVAILABLE',
+        message: '店舗状態の確認中にエラーが発生したため、注文を中断しました。',
+        status: 503,
+        orderCancelled: cancelRes.cancelled,
+      };
+    }
+
+    const postValidation = validateCheckoutRequest({
+      body,
+      storeState: postOrderStoreState,
+      now,
+    });
+
+    if (!postValidation.ok) {
+      const cancelRes = await cancelOrderWithRetry(
+        deps,
+        createdOrder.id,
+        undefined,
+        `aborted_before_stripe_${postValidation.code}`
+      );
+      return {
+        ...postValidation,
+        orderCancelled: cancelRes.cancelled,
+      };
+    }
+  }
+
+  // Step 4: Stripe Checkout Session の発行（外部通信中は DB ロックを保持しない）
+  let session: { id?: string; url: string | null };
   try {
-    postOrderStoreState = await deps.getStoreState();
+    session = await deps.createStripeCheckoutSession({
+      order: createdOrder,
+      items: validation.sanitizedItems,
+      origin,
+    });
   } catch (err) {
-    console.error('[CheckoutGuard] Post-order store state check failed, aborting order:', err);
-    await deps.cancelOrderOnAbort(createdOrder.id).catch(() => {});
+    console.error('[CheckoutGuard] Stripe session creation threw an error:', err);
+    const cancelRes = await cancelOrderWithRetry(
+      deps,
+      createdOrder.id,
+      undefined,
+      'stripe_session_creation_exception'
+    );
     return {
       ok: false,
-      code: 'STORE_STATE_UNAVAILABLE',
-      message: '店舗状態の確認中にエラーが発生したため、注文を中断しました。',
-      status: 503,
+      code: 'SESSION_CREATION_FAILED',
+      message: '決済セッションの作成に失敗しました。',
+      status: 500,
+      orderCancelled: cancelRes.cancelled,
     };
   }
 
-  const postValidation = validateCheckoutRequest({
-    body,
-    storeState: postOrderStoreState,
-    now,
-  });
-
-  if (!postValidation.ok) {
-    // 競合により受付停止または欠品となったため、作成した未決済注文を即座に取消し、Stripe セッションを発行しない
-    await deps.cancelOrderOnAbort(createdOrder.id).catch((cancelErr) => {
-      console.error('[CheckoutGuard] Failed to cancel aborted order:', cancelErr);
-    });
-    return postValidation;
-  }
-
-  // Step 5: Stripe Checkout Session の発行
-  const session = await deps.createStripeCheckoutSession({
-    order: createdOrder,
-    items: validation.sanitizedItems,
-    origin,
-  });
-
   if (!session.url) {
-    await deps.cancelOrderOnAbort(createdOrder.id).catch(() => {});
+    const expireRes = await expireSessionWithRetry(
+      deps,
+      createdOrder.id,
+      session.id,
+      'session_url_missing'
+    );
+    const cancelRes = await cancelOrderWithRetry(
+      deps,
+      createdOrder.id,
+      session.id,
+      'session_url_missing'
+    );
     return {
       ok: false,
       code: 'SESSION_CREATION_FAILED',
       message: '決済セッションURLの取得に失敗しました。',
       status: 500,
+      sessionExpired: expireRes.expired,
+      orderCancelled: cancelRes.cancelled,
     };
+  }
+
+  // Step 5: Stripe セッション作成完了直後の受付状態再確認（2回目チェック後〜Stripe通信完了までの競合窓を遮断）
+  if (deps.finalizeCheckoutSession) {
+    let finalizeResult: FinalizeMobileOrderCheckoutResult;
+    try {
+      finalizeResult = await deps.finalizeCheckoutSession({
+        orderId: createdOrder.id,
+        stripeSessionId: session.id || '',
+        itemIds,
+        now,
+      });
+    } catch (err) {
+      console.error('[CheckoutGuard] finalizeCheckoutSession failed, aborting:', err);
+      const expireRes = await expireSessionWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        'finalize_checkout_exception'
+      );
+      const cancelRes = await cancelOrderWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        'finalize_checkout_exception'
+      );
+      return {
+        ok: false,
+        code: 'STORE_STATE_UNAVAILABLE',
+        message: '店舗状態の確認中にエラーが発生したため、注文を中断しました。',
+        status: 503,
+        sessionExpired: expireRes.expired,
+        orderCancelled: cancelRes.cancelled,
+      };
+    }
+
+    if (!finalizeResult.ok) {
+      const expireRes = await expireSessionWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        `aborted_during_stripe_${finalizeResult.code}`
+      );
+      if (!finalizeResult.orderCancelled) {
+        await cancelOrderWithRetry(
+          deps,
+          createdOrder.id,
+          session.id,
+          `aborted_during_stripe_${finalizeResult.code}`
+        );
+      }
+      const mappedCode: CheckoutRejectionCode =
+        finalizeResult.code === 'ITEM_SOLD_OUT'
+          ? 'ITEM_SOLD_OUT'
+          : finalizeResult.code === 'STORE_CLOSED'
+            ? 'STORE_CLOSED'
+            : 'STORE_STATE_UNAVAILABLE';
+      return {
+        ok: false,
+        code: mappedCode,
+        message: finalizeResult.message,
+        status: mappedCode === 'ITEM_SOLD_OUT' ? 409 : 503,
+        sessionExpired: expireRes.expired,
+        orderCancelled: true,
+      };
+    }
+  } else {
+    let postSessionStoreState: StoreState | null = null;
+    try {
+      postSessionStoreState = await deps.getStoreState();
+    } catch (err) {
+      console.error('[CheckoutGuard] Post-Stripe-session store state check failed:', err);
+      const expireRes = await expireSessionWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        'post_session_state_check_failed'
+      );
+      const cancelRes = await cancelOrderWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        'post_session_state_check_failed'
+      );
+      return {
+        ok: false,
+        code: 'STORE_STATE_UNAVAILABLE',
+        message: '店舗状態の確認中にエラーが発生したため、注文を中断しました。',
+        status: 503,
+        sessionExpired: expireRes.expired,
+        orderCancelled: cancelRes.cancelled,
+      };
+    }
+
+    const postSessionValidation = validateCheckoutRequest({
+      body,
+      storeState: postSessionStoreState,
+      now,
+    });
+
+    if (!postSessionValidation.ok) {
+      const expireRes = await expireSessionWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        `aborted_after_stripe_${postSessionValidation.code}`
+      );
+      const cancelRes = await cancelOrderWithRetry(
+        deps,
+        createdOrder.id,
+        session.id,
+        `aborted_after_stripe_${postSessionValidation.code}`
+      );
+      return {
+        ...postSessionValidation,
+        sessionExpired: expireRes.expired,
+        orderCancelled: cancelRes.cancelled,
+      };
+    }
   }
 
   return {
     ok: true,
     url: session.url,
+    sessionId: session.id,
     orderId: createdOrder.id,
     orderNumber: createdOrder.orderNumber,
   };

@@ -1,6 +1,12 @@
 import { type NextRequest } from 'next/server';
 import Stripe from 'stripe';
-import { addOrder, getStoreState, updateOrderStatus } from '../../../lib/store';
+import {
+  abortMobileOrderCheckout,
+  addOrder,
+  createMobileOrderAtomically,
+  finalizeMobileOrderCheckout,
+  getStoreState,
+} from '../../../lib/store';
 import { executeGuardedCheckout } from '../../../lib/checkoutValidation';
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || 'sk_test_mock';
@@ -19,8 +25,14 @@ export async function POST(request: NextRequest) {
       deps: {
         getStoreState,
         addOrder,
-        cancelOrderOnAbort: async (orderId: string) => {
-          await updateOrderStatus(orderId, 'cancelled', 'cancel_order');
+        createMobileOrderAtomically,
+        finalizeCheckoutSession: finalizeMobileOrderCheckout,
+        cancelOrderOnAbort: async (
+          orderId: string,
+          stripeSessionId?: string,
+          reason?: string
+        ) => {
+          await abortMobileOrderCheckout({ orderId, stripeSessionId, reason });
         },
         createStripeCheckoutSession: async ({ order, items, origin: reqOrigin }) => {
           const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = items.map(
@@ -51,7 +63,10 @@ export async function POST(request: NextRequest) {
             cancel_url: `${reqOrigin}/?cancelled=true`,
           });
 
-          return { url: session.url };
+          return { id: session.id, url: session.url };
+        },
+        expireStripeCheckoutSession: async (sessionId: string) => {
+          await stripe.checkout.sessions.expire(sessionId);
         },
       },
     });

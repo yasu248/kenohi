@@ -1,10 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
+  MENU_CATALOG,
+  MENU_NAME_BY_ID,
   executeGuardedCheckout,
   validateCheckoutRequest,
   type ICheckoutExecutionDependencies,
 } from '../src/lib/checkoutValidation.ts';
+import { shouldIncludeOrderInSalesHistory } from '../src/lib/orderStatus.ts';
 import {
   verifyAndConfirmStripePayment,
   type IPaymentConfirmationRepository,
@@ -628,5 +633,222 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
       assert.equal(item.sweetness, '控えめ');
       assert.equal(item.ice, '氷なし');
     }
+  });
+
+  it('11. Stripeセッション発行中の受付停止テスト: Stripe通信中に受付停止された場合、セッションをexpireし注文をキャンセルして 503 で遮断する', async () => {
+    let storeIsOpen = true;
+    const expiredSessionIds: string[] = [];
+    const cancelledOrders: Array<{ orderId: string; sessionId?: string; reason?: string }> = [];
+
+    const res = await executeGuardedCheckout({
+      body: {
+        items: [
+          {
+            id: 'm1',
+            name: '緑茶ミルクティー (ゼリー: なし, 甘さ: 普通, 氷: 氷あり)',
+            price: 400,
+            quantity: 1,
+          },
+        ],
+        customerName: 'Stripe通信中閉店テスト顧客',
+        totalPrice: 400,
+      },
+      origin: 'https://kenocha.example.com',
+      now: OPEN_TIME_JST,
+      deps: {
+        getStoreState: async () =>
+          createOpenStoreState({ isManualOpen: storeIsOpen }),
+        addOrder: async (items, customerName) => ({
+          id: 'ORD-DURING-STRIPE',
+          items,
+          totalPrice: 400,
+          customerName,
+          status: 'unpaid',
+          createdAt: OPEN_TIME_JST.toISOString(),
+          orderNumber: '3211',
+        }),
+        cancelOrderOnAbort: async (orderId, stripeSessionId, reason) => {
+          cancelledOrders.push({ orderId, sessionId: stripeSessionId, reason });
+        },
+        createStripeCheckoutSession: async ({ order }) => {
+          // 2回目のチェック通過後・Stripe API 通信中にスタッフが受付停止!
+          storeIsOpen = false;
+          return {
+            id: `cs_test_${order.id}`,
+            url: `https://checkout.stripe.com/c/pay/cs_test_${order.id}`,
+          };
+        },
+        expireStripeCheckoutSession: async (sessionId) => {
+          expiredSessionIds.push(sessionId);
+        },
+      },
+    });
+
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.code, 'STORE_CLOSED');
+      assert.equal(res.status, 503);
+      assert.equal(res.sessionExpired, true);
+      assert.equal(res.orderCancelled, true);
+    }
+    assert.deepEqual(expiredSessionIds, ['cs_test_ORD-DURING-STRIPE']);
+    assert.equal(cancelledOrders.length, 1);
+    assert.equal(cancelledOrders[0].orderId, 'ORD-DURING-STRIPE');
+    assert.equal(cancelledOrders[0].sessionId, 'cs_test_ORD-DURING-STRIPE');
+  });
+
+  it('12. Stripeセッション失効 (expire) 失敗時の再試行と安全遮断テスト: expireが3回失敗しても注文はキャンセルされ決済URLは顧客に返らない', async () => {
+    let storeIsOpen = true;
+    let expireAttemptCount = 0;
+    let cancelAttemptCount = 0;
+
+    const res = await executeGuardedCheckout({
+      body: {
+        items: [
+          {
+            id: 's3',
+            name: '釜炒り緑茶 (ゼリー: なし, 甘さ: 普通, 氷: 氷あり)',
+            price: 250,
+            quantity: 1,
+          },
+        ],
+        customerName: 'Expire失敗テスト顧客',
+        totalPrice: 250,
+      },
+      origin: 'https://kenocha.example.com',
+      now: OPEN_TIME_JST,
+      deps: {
+        maxRetryAttempts: 3,
+        getStoreState: async () =>
+          createOpenStoreState({ isManualOpen: storeIsOpen }),
+        addOrder: async (items, customerName) => ({
+          id: 'ORD-EXPIRE-FAIL',
+          items,
+          totalPrice: 250,
+          customerName,
+          status: 'unpaid',
+          createdAt: OPEN_TIME_JST.toISOString(),
+          orderNumber: '3212',
+        }),
+        cancelOrderOnAbort: async () => {
+          cancelAttemptCount += 1;
+          if (cancelAttemptCount < 2) {
+            throw new Error('Transient DB error on 1st cancel attempt');
+          }
+        },
+        createStripeCheckoutSession: async ({ order }) => {
+          storeIsOpen = false;
+          return {
+            id: `cs_test_${order.id}`,
+            url: `https://checkout.stripe.com/c/pay/cs_test_${order.id}`,
+          };
+        },
+        expireStripeCheckoutSession: async () => {
+          expireAttemptCount += 1;
+          throw new Error('Stripe API network timeout during expire');
+        },
+      },
+    });
+
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.code, 'STORE_CLOSED');
+      assert.equal(res.status, 503);
+      assert.equal(res.sessionExpired, false);
+      assert.equal(res.orderCancelled, true);
+    }
+    assert.equal(expireAttemptCount, 3, 'expireStripeCheckoutSession が3回リトライされること');
+    assert.equal(cancelAttemptCount, 2, 'cancelOrderOnAbort が1回目失敗後に2回目で成功すること');
+  });
+
+  it('13. 中断注文の売上履歴除外と過去注文 (legacy_undetermined) の互換性テスト', () => {
+    // 1. 決済前に中断キャンセルされた注文 (status='cancelled', paymentStatus='unpaid', cancellationStatus='cancelled') -> 除外 (false)
+    assert.equal(
+      shouldIncludeOrderInSalesHistory({
+        status: 'cancelled',
+        paymentStatus: 'unpaid',
+        cancellationStatus: 'cancelled',
+      }),
+      false,
+      '決済前に中断された未決済キャンセル注文は売上履歴から除外されること'
+    );
+
+    // 2. 未決済注文 (status='unpaid') -> 除外 (false)
+    assert.equal(
+      shouldIncludeOrderInSalesHistory({
+        status: 'unpaid',
+        paymentStatus: 'unpaid',
+        cancellationStatus: 'active',
+      }),
+      false
+    );
+
+    // 3. 決済失敗注文 (paymentStatus='failed') -> 除外 (false)
+    assert.equal(
+      shouldIncludeOrderInSalesHistory({
+        status: 'cancelled',
+        paymentStatus: 'failed',
+        cancellationStatus: 'cancelled',
+      }),
+      false
+    );
+
+    // 4. 過去データ (status='cancelled' かつ 4軸カラム NULL/undefined) -> 保持 (true: legacy_undetermined として互換表示)
+    assert.equal(
+      shouldIncludeOrderInSalesHistory({
+        status: 'cancelled',
+        paymentStatus: undefined,
+        productionStatus: undefined,
+        fulfillmentStatus: undefined,
+        cancellationStatus: undefined,
+      }),
+      true,
+      '過去の legacy_undetermined 注文は未決済扱いされず売上履歴に保持されること'
+    );
+
+    // 5. Phase 0 以降の受渡完了注文 (status='cancelled', paymentStatus='paid', fulfillmentStatus='handed_over') -> 保持 (true)
+    assert.equal(
+      shouldIncludeOrderInSalesHistory({
+        status: 'cancelled',
+        paymentStatus: 'paid',
+        productionStatus: 'ready',
+        fulfillmentStatus: 'handed_over',
+        cancellationStatus: 'active',
+      }),
+      true
+    );
+  });
+
+  it('14. 商品マスターの一元化 (Single Source of Truth) 自動検証テスト: 全11商品の定義と各画面の共通参照を確認', () => {
+    assert.equal(MENU_CATALOG.length, 11);
+    const expectedIds = ['s1', 's2', 's3', 's4', 's5', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6'];
+    assert.deepEqual(
+      MENU_CATALOG.map((i) => i.id),
+      expectedIds
+    );
+
+    for (const item of MENU_CATALOG) {
+      assert.equal(MENU_NAME_BY_ID[item.id], item.name);
+      assert.equal(item.price, item.category === 'straight' ? 250 : 400);
+      assert.equal(item.allowZeroSweetness, item.id !== 'm5' && item.id !== 'm6');
+      assert.equal(item.image.startsWith('/'), true);
+      assert.equal(item.desc.length > 0, true);
+    }
+
+    // 顧客画面・欠品管理画面・管理者画面がすべて menuCatalog をインポートして参照していることを検証
+    const rootDir = path.resolve(import.meta.dirname, '..');
+    const customerPage = fs.readFileSync(path.join(rootDir, 'src/app/page.tsx'), 'utf8');
+    const soldOutPage = fs.readFileSync(
+      path.join(rootDir, 'src/app/kitchen/sold-out/page.tsx'),
+      'utf8'
+    );
+    const adminPage = fs.readFileSync(
+      path.join(rootDir, 'src/app/kitchen/admin/page.tsx'),
+      'utf8'
+    );
+
+    assert.match(customerPage, /from '\.\.\/lib\/menuCatalog'/);
+    assert.match(soldOutPage, /from '\.\.\/\.\.\/\.\.\/lib\/menuCatalog'/);
+    assert.match(adminPage, /from '\.\.\/\.\.\/\.\.\/lib\/menuCatalog'/);
   });
 });

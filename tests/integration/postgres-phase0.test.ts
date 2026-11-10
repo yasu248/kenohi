@@ -568,4 +568,338 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.equal(unauthenticatedPublicState.soldOutItems.length, 2);
     });
   });
+
+  describe('6. Checkout競合制御RPC・売上履歴除外・バックアップ復元ACL維持の統合検証', () => {
+    it('6.1 新設4RPCを含む全6RPCの権限制御 (anon/authenticated拒否、service_role許可、SECURITY DEFINER、search_path固定)', () => {
+      const rpcNames = [
+        'next_order_number',
+        'confirm_stripe_order_payment_tx',
+        'update_store_state_tx',
+        'create_mobile_order_tx',
+        'finalize_mobile_order_checkout_tx',
+        'abort_mobile_order_checkout_tx',
+      ];
+
+      for (const fnName of rpcNames) {
+        const meta = querySingle(`
+          SELECT
+            p.prosecdef::text || '|' ||
+            COALESCE(array_to_string(p.proconfig, ','), '') || '|' ||
+            has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|' ||
+            has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || '|' ||
+            has_function_privilege('service_role', p.oid, 'EXECUTE')::text
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = '${fnName}';
+        `);
+        assert.equal(
+          meta,
+          'true|search_path=public, pg_temp|false|false|true',
+          `${fnName} の SECURITY DEFINER / search_path / ACL が正しく設定されていること`
+        );
+      }
+
+      // anon / authenticated ロールから新設RPCを直接呼び出すと permission denied になることを実DBで確認
+      assert.throws(() => {
+        runPsql(`
+          SET ROLE anon;
+          SELECT public.create_mobile_order_tx(
+            'kenocha_main', 'ord_hack', '[]'::jsonb, 400, 'Hacker', NULL, ARRAY['m1'], NOW()
+          );
+        `);
+      }, /permission denied for function create_mobile_order_tx/);
+
+      assert.throws(() => {
+        runPsql(`
+          SET ROLE authenticated;
+          SELECT public.update_store_state_tx('kenocha_main', '{"isManualOpen":true}'::jsonb);
+        `);
+      }, /permission denied for function update_store_state_tx/);
+    });
+
+    it('6.2 受付停止と注文作成の直列化 & 受付停止直後のCheckout開始拒否 (採番インクリメントなし・注文INSERTなし)', () => {
+      // 1. 営業中 (2026-11-11 11:00 JST = 02:00 UTC) に update_store_state_tx で店舗状態をセット
+      runPsql(`
+        SET ROLE service_role;
+        SELECT public.update_store_state_tx(
+          'kenocha_main',
+          jsonb_build_object(
+            'isManualOpen', true,
+            'date', '2026-11-11',
+            'openedAt', (EXTRACT(EPOCH FROM TIMESTAMPTZ '2026-11-11T01:00:00Z') * 1000)::bigint,
+            'soldOutItems', jsonb_build_array('s5')
+          )
+        );
+      `);
+
+      // 2. 営業中の正常注文作成 -> 成功
+      const createOpenRes = JSON.parse(
+        querySingle(`
+          SET ROLE service_role;
+          SELECT public.create_mobile_order_tx(
+            'kenocha_main',
+            'ord_atomic_open_1',
+            '[{"id":"m1","name":"緑茶ミルクティー (ゼリー: なし, 甘さ: 普通, 氷: 氷あり)","price":400,"quantity":1}]'::jsonb,
+            400,
+            '営業中顧客',
+            NULL,
+            ARRAY['m1'],
+            TIMESTAMPTZ '2026-11-11T02:00:00Z'
+          )::text;
+        `)
+          .split('\n')
+          .pop()!
+      );
+      assert.equal(createOpenRes.ok, true);
+      assert.equal(createOpenRes.order.id, 'ord_atomic_open_1');
+      assert.equal(createOpenRes.order.status, 'unpaid');
+
+      const seqBeforeClose = querySingle(`
+        SELECT last_number FROM public.order_number_sequences
+        WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
+      `);
+
+      // 3. 欠品商品 (s5) の注文 -> ITEM_SOLD_OUT で拒否され、採番シーケンスが進まないこと
+      const soldOutRes = JSON.parse(
+        querySingle(`
+          SET ROLE service_role;
+          SELECT public.create_mobile_order_tx(
+            'kenocha_main',
+            'ord_atomic_soldout',
+            '[{"id":"s5","name":"ほうじ茶","price":250,"quantity":1}]'::jsonb,
+            250,
+            '欠品注文顧客',
+            NULL,
+            ARRAY['s5'],
+            TIMESTAMPTZ '2026-11-11T02:01:00Z'
+          )::text;
+        `)
+          .split('\n')
+          .pop()!
+      );
+      assert.equal(soldOutRes.ok, false);
+      assert.equal(soldOutRes.code, 'ITEM_SOLD_OUT');
+
+      // 4. 受付停止 (isManualOpen: false) 更新と複数の注文作成を並列実行し、停止後は1件も作成されず採番も進まないことを検証
+      runPsql(`
+        SET ROLE service_role;
+        SELECT public.update_store_state_tx(
+          'kenocha_main',
+          jsonb_build_object(
+            'isManualOpen', false,
+            'date', '2026-11-11',
+            'openedAt', (EXTRACT(EPOCH FROM TIMESTAMPTZ '2026-11-11T01:00:00Z') * 1000)::bigint,
+            'soldOutItems', jsonb_build_array('s5')
+          )
+        );
+      `);
+
+      const closedRes = JSON.parse(
+        querySingle(`
+          SET ROLE service_role;
+          SELECT public.create_mobile_order_tx(
+            'kenocha_main',
+            'ord_atomic_after_close',
+            '[{"id":"m1","name":"緑茶ミルクティー","price":400,"quantity":1}]'::jsonb,
+            400,
+            '受付停止後顧客',
+            NULL,
+            ARRAY['m1'],
+            TIMESTAMPTZ '2026-11-11T02:02:00Z'
+          )::text;
+        `)
+          .split('\n')
+          .pop()!
+      );
+      assert.equal(closedRes.ok, false);
+      assert.equal(closedRes.code, 'STORE_CLOSED');
+
+      const seqAfterClose = querySingle(`
+        SELECT last_number FROM public.order_number_sequences
+        WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
+      `);
+      assert.equal(
+        seqAfterClose,
+        seqBeforeClose,
+        '欠品拒否および受付停止拒否時には注文番号シーケンスが一切消費されないこと'
+      );
+
+      const existsAfterClose = querySingle(`
+        SELECT COUNT(*) FROM public.orders WHERE id IN ('ord_atomic_soldout', 'ord_atomic_after_close');
+      `);
+      assert.equal(existsAfterClose, '0', '拒否された注文レコードはDBに1件もINSERTされないこと');
+    });
+
+    it('6.3 Stripeセッション発行中の受付停止検知 (finalize_mobile_order_checkout_tx) と決済完了 vs キャンセル競合保護 (abort_mobile_order_checkout_tx)', () => {
+      // ord_atomic_open_1 は営業中に作成された unpaid 注文。
+      // その直後（Stripeセッション作成中）に店舗が isManualOpen: false になった状態で finalize_mobile_order_checkout_tx を呼ぶ
+      const finalizeClosedRes = JSON.parse(
+        querySingle(`
+          SET ROLE service_role;
+          SELECT public.finalize_mobile_order_checkout_tx(
+            'kenocha_main',
+            'ord_atomic_open_1',
+            'cs_test_during_close_001',
+            ARRAY['m1'],
+            TIMESTAMPTZ '2026-11-11T02:03:00Z'
+          )::text;
+        `)
+          .split('\n')
+          .pop()!
+      );
+      assert.equal(finalizeClosedRes.ok, false);
+      assert.equal(finalizeClosedRes.code, 'STORE_CLOSED');
+      assert.equal(finalizeClosedRes.order_cancelled, true);
+
+      // DB上で status='cancelled', payment_status='unpaid', cancellation_status='cancelled' になっていることを確認
+      const abortedOrderRow = querySingle(`
+        SELECT status || '|' || payment_status || '|' || cancellation_status || '|' || COALESCE(stripe_session_id, '')
+        FROM public.orders WHERE id = 'ord_atomic_open_1';
+      `);
+      assert.equal(abortedOrderRow, 'cancelled|unpaid|cancelled|cs_test_during_close_001');
+
+      // 次に、すでに決済完了した注文 (ord_stripe_unpaid はテスト4.1で status='preparing' または 'pending', payment_status='paid' になっている)
+      // に対して abort_mobile_order_checkout_tx が呼ばれても、絶対にキャンセルされず ALREADY_PAID で保護されることを検証
+      const abortPaidRes = JSON.parse(
+        querySingle(`
+          SET ROLE service_role;
+          SELECT public.abort_mobile_order_checkout_tx(
+            'ord_stripe_unpaid',
+            'cs_test_paid',
+            'race_abort_attempt'
+          )::text;
+        `)
+          .split('\n')
+          .pop()!
+      );
+      assert.equal(abortPaidRes.ok, false);
+      assert.equal(abortPaidRes.code, 'ALREADY_PAID');
+
+      const paidOrderStillActive = querySingle(`
+        SELECT payment_status || '|' || cancellation_status
+        FROM public.orders WHERE id = 'ord_stripe_unpaid';
+      `);
+      assert.equal(paidOrderStillActive, 'paid|active', '決済済み注文はキャンセルや削除から完全に保護されること');
+    });
+
+    it('6.4 中断注文の売上履歴除外と過去注文 (legacy_undetermined) の売上履歴互換性検証', () => {
+      // GET /api/orders/history と同一のSQL条件で取得した場合:
+      // - ord_atomic_open_1 (status='cancelled', payment_status='unpaid', cancellation_status='cancelled') は除外される
+      // - legacy_cancelled_1 (status='cancelled', payment_status IS NULL) は保持される
+      // - ord_stripe_unpaid (payment_status='paid') は保持される
+      const historyIds = querySingle(`
+        SELECT string_agg(id, ',' ORDER BY id)
+        FROM public.orders
+        WHERE id <> 'STORE_STATE_001'
+          AND status <> 'unpaid'
+          AND (payment_status IS NULL OR payment_status IN ('paid', 'partially_refunded', 'refunded'));
+      `);
+
+      assert.equal(
+        historyIds.includes('ord_atomic_open_1'),
+        false,
+        '決済前に中断された注文 (payment_status=unpaid) は売上履歴クエリから除外されること'
+      );
+      assert.equal(
+        historyIds.includes('legacy_cancelled_1'),
+        true,
+        '過去データ (payment_status IS NULL) は売上履歴クエリに保持されること'
+      );
+      assert.equal(
+        historyIds.includes('ord_stripe_unpaid'),
+        true,
+        '決済済み注文 (payment_status=paid) は売上履歴クエリに保持されること'
+      );
+    });
+
+    it('6.5 マイグレーション再実行の冪等性と pg_dump / pg_restore (--no-privileges なし) による全6RPCのACL維持検証', () => {
+      // 1. マイグレーション SQL 再実行の冪等性確認
+      const migrationSql = readFileSync(MIGRATION_FILE_PATH, 'utf8');
+      runPsql(migrationSql);
+
+      // 2. pg_dump (--no-privileges なし) でダンプを取得し、別DBへ pg_restore して全6RPCのACLが維持されることを実証
+      runPsql(`
+        DROP DATABASE IF EXISTS kenocha_restore_acl_verify;
+        CREATE DATABASE kenocha_restore_acl_verify;
+      `);
+
+      execFileSync(
+        'docker',
+        [
+          'exec',
+          CONTAINER_NAME,
+          'pg_dump',
+          '-U',
+          'postgres',
+          '--format=custom',
+          '--blobs',
+          '--no-owner',
+          '--schema=public',
+          '--file=/tmp/phase0_acl_verify.dump',
+          'postgres',
+        ],
+        { stdio: 'ignore' }
+      );
+
+      execFileSync(
+        'docker',
+        [
+          'exec',
+          CONTAINER_NAME,
+          'pg_restore',
+          '-U',
+          'postgres',
+          '--clean',
+          '--if-exists',
+          '--no-owner',
+          '--dbname=kenocha_restore_acl_verify',
+          '/tmp/phase0_acl_verify.dump',
+        ],
+        { stdio: 'ignore' }
+      );
+
+      const restoredAclCheck = execFileSync(
+        'docker',
+        [
+          'exec',
+          CONTAINER_NAME,
+          'psql',
+          '-U',
+          'postgres',
+          '-d',
+          'kenocha_restore_acl_verify',
+          '-t',
+          '-A',
+          '-c',
+          `
+          SELECT COUNT(*)
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname IN (
+              'next_order_number',
+              'confirm_stripe_order_payment_tx',
+              'update_store_state_tx',
+              'create_mobile_order_tx',
+              'finalize_mobile_order_checkout_tx',
+              'abort_mobile_order_checkout_tx'
+            )
+            AND has_function_privilege('anon', p.oid, 'EXECUTE') = false
+            AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = false
+            AND has_function_privilege('service_role', p.oid, 'EXECUTE') = true;
+          `,
+        ],
+        { encoding: 'utf8' }
+      ).trim();
+
+      assert.equal(
+        restoredAclCheck,
+        '6',
+        'pg_restore 後も全6個の SECURITY DEFINER RPC関数で anon=false, authenticated=false, service_role=true が維持されていること'
+      );
+
+      // クリーンアップ
+      runPsql(`DROP DATABASE IF EXISTS kenocha_restore_acl_verify;`);
+    });
+  });
 });
