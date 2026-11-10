@@ -6,10 +6,32 @@ import {
 } from '../../../lib/store';
 import { authorizeStaffRequest } from '../../../lib/auth';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const state = await getStoreState();
-    return NextResponse.json(state || { isManualOpen: false, date: '' });
+    if (!state) {
+      return NextResponse.json({ isManualOpen: false, date: '', soldOutItems: [] });
+    }
+
+    // スタッフ認証（Cookieセッション）の有無を判定
+    const auth = await authorizeStaffRequest(req, supabaseAuthPersistenceStore, {
+      enforceCsrf: false,
+    });
+
+    if (auth.authorized) {
+      // スタッフ・管理者は全管理情報（openHistory, lastOrderNumber 等）を取得可能
+      return NextResponse.json(state);
+    }
+
+    // 未認証（一般顧客画面等）は公開情報のみに最小化し、内部管理情報を返さない
+    const publicState = {
+      isManualOpen: Boolean(state.isManualOpen),
+      date: state.date || '',
+      openedAt: state.openedAt,
+      soldOutItems: state.soldOutItems ?? [],
+    };
+
+    return NextResponse.json(publicState);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal Server Error';
     return NextResponse.json({ error: message }, { status: 500 });

@@ -141,6 +141,7 @@ CREATE OR REPLACE FUNCTION public.next_order_number(
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_max_orders_num INTEGER := 0;
@@ -317,6 +318,7 @@ CREATE OR REPLACE FUNCTION public.confirm_stripe_order_payment_tx(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_order public.orders%ROWTYPE;
@@ -433,5 +435,31 @@ ALTER TABLE public.order_number_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stripe_webhook_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auth_login_rate_limits ENABLE ROW LEVEL SECURITY;
+
+-- -----------------------------------------------------------------------------
+-- 7. SECURITY DEFINER 関数の実行権限制限 (Phase 0 / 監査修正)
+--    - PUBLIC / anon / authenticated から EXECUTE 権限を剥奪
+--    - service_role のみに EXECUTE 権限を付与
+-- -----------------------------------------------------------------------------
+REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM anon';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM authenticated';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.next_order_number(TEXT, TEXT) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) TO service_role';
+  END IF;
+END $$;
 
 COMMIT;

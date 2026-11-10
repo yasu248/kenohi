@@ -144,8 +144,8 @@ FROM today_jst t;
 
 ### 手順 8. 新コードのデプロイ
 - Vercel の本番環境変数に以下が設定されていることを確認します：
-  - `KITCHEN_STAFF_PASSWORD`（スタッフ用パスワード）
-  - `KITCHEN_ADMIN_PASSWORD`（管理者用パスワード）
+  - `STAFF_PASSWORD`（スタッフ用パスワード）
+  - `ADMIN_PASSWORD`（管理者用パスワード）
   - `AUTH_SESSION_SECRET`（32文字以上のランダム秘密鍵）
   - `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - `phase0-safe-foundation` ブランチをデプロイします。
