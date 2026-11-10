@@ -27,7 +27,7 @@ function createOpenStoreState(overrides: Partial<StoreState> = {}): StoreState {
     date: '2026-11-11',
     openedAt: OPENED_AT_MORNING_MS,
     soldOutItems: [],
-    todayTeaName: '静岡県産 さえみどり',
+    todaysTeaName: '静岡県産 さえみどり',
     ...overrides,
   };
 }
@@ -71,9 +71,9 @@ function createMockCheckoutDeps(params: {
         createdAt: OPEN_TIME_JST.toISOString(),
         orderNumber: String(1001 + createdOrders.length),
         paymentStatus: 'unpaid',
-        productionStatus: 'not_started',
-        fulfillmentStatus: 'not_ready',
-        cancellationStatus: 'none',
+        productionStatus: 'unstarted',
+        fulfillmentStatus: 'not_handed_over',
+        cancellationStatus: 'active',
       };
       createdOrders.push(order);
       return order;
@@ -83,7 +83,7 @@ function createMockCheckoutDeps(params: {
       const target = createdOrders.find((o) => o.id === orderId);
       if (target) {
         target.status = 'cancelled';
-        target.cancellationStatus = 'cancelled_before_payment';
+        target.cancellationStatus = 'cancelled';
       }
     },
     createStripeCheckoutSession: async ({ order }) => {
@@ -517,9 +517,9 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
       totalPrice: 400,
       status: 'unpaid',
       paymentStatus: 'unpaid',
-      productionStatus: 'not_started',
-      fulfillmentStatus: 'not_ready',
-      cancellationStatus: 'none',
+      productionStatus: 'unstarted',
+      fulfillmentStatus: 'not_handed_over',
+      cancellationStatus: 'active',
     };
 
     const events = new Map<string, StripeWebhookEventRecord>();
@@ -536,7 +536,7 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
         });
         return { state: 'acquired', attemptCount: 1 };
       },
-      releaseStripeWebhookEventOnTransientError: async (eventId) => {
+      releaseStripeWebhookEventOnTransientError: async (eventId: string) => {
         events.delete(eventId);
       },
       markStripeWebhookEventPermanentFailure: async (params) => {
@@ -548,17 +548,18 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
           updatedAt: Date.now(),
         });
       },
-      getOrderForPaymentConfirmation: async (orderId) =>
+      getOrderById: async (orderId: string) =>
         orderId === existingOrder.id ? existingOrder : null,
-      confirmOrderPaymentInTransaction: async ({ eventId }) => {
+      atomicConfirmOrderPayment: async ({ stripeSessionId, webhookEventId }) => {
         existingOrder.status = 'pending';
         existingOrder.paymentStatus = 'paid';
-        existingOrder.productionStatus = 'queued';
-        if (eventId) {
-          const ev = events.get(eventId);
+        existingOrder.productionStatus = 'pending';
+        existingOrder.stripeSessionId = stripeSessionId;
+        if (webhookEventId) {
+          const ev = events.get(webhookEventId);
           if (ev) ev.status = 'succeeded';
         }
-        return { updated: true, alreadyPaid: false };
+        return { updatedOrder: existingOrder, transitionedFromUnpaid: true };
       },
     };
 
@@ -573,16 +574,19 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
           orderId: 'ORD-BEFORE-CLOSE',
           orderNumber: '1009',
         },
-        payment_intent: 'pi_live_001',
       },
-      eventId: 'evt_live_001',
+      webhookEventId: 'evt_live_001',
       repo,
     });
 
-    assert.equal(confirmResult.outcome, 'confirmed');
+    assert.equal(confirmResult.ok, true);
+    if (confirmResult.ok) {
+      assert.equal(confirmResult.transitionedToPending, true);
+      assert.equal(confirmResult.currentStatus, 'pending');
+    }
     assert.equal(existingOrder.status, 'pending');
     assert.equal(existingOrder.paymentStatus, 'paid');
-    assert.equal(existingOrder.productionStatus, 'queued');
+    assert.equal(existingOrder.productionStatus, 'pending');
   });
 
   it('10. 既存のLINE LIFF注文フォーマット回帰テスト: キッチンモニターおよびQRラベル印刷が参照する商品名・オプション文字列・価格が完全に維持される', () => {
