@@ -191,4 +191,25 @@ describe('[Phase 0-B] スタッフ・管理者認証および認可テスト', (
     assert.equal(res2.authorized, false);
     if (!res2.authorized) assert.equal(res2.status, 401);
   });
+
+  it('8. 認証環境変数の厳密な確認: STAFF_PASSWORD / ADMIN_PASSWORD / AUTH_SESSION_SECRET のみが参照され、別名フォールバックしないこと', async () => {
+    // 正常設定時
+    const loginOk = await authenticateStaffLogin(store, 'staff_test_pass_2026', 'ip_env');
+    assert.equal(loginOk.ok, true);
+
+    // STAFF_PASSWORD が未設定で KITCHEN_STAFF_PASSWORD のみが存在する場合、フォールバックせず未設定(503)となること
+    delete process.env.STAFF_PASSWORD;
+    delete process.env.ADMIN_PASSWORD;
+    process.env.KITCHEN_STAFF_PASSWORD = 'legacy_kitchen_pass';
+
+    const loginFail = await authenticateStaffLogin(store, 'legacy_kitchen_pass', 'ip_env');
+    assert.equal(loginFail.ok, false);
+    if (!loginFail.ok) {
+      assert.equal(loginFail.status, 503);
+      assert.ok(loginFail.error.includes('STAFF_PASSWORD / AUTH_SESSION_SECRET'));
+    }
+
+    // クリーンアップ
+    delete process.env.KITCHEN_STAFF_PASSWORD;
+  });
 });

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test 'tests/**/*.test.ts'"
+    "test": "node --experimental-strip-types --test 'tests/**/*.test.ts'",
+    "test:integration": "node --experimental-strip-types --test tests/integration/postgres-phase0.test.ts"
   },
   "dependencies": {
     "@line/liff": "^2.29.0",
