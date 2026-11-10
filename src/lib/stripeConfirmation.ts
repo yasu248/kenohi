@@ -28,6 +28,7 @@ export interface StripeCheckoutSessionLike {
     orderId?: string;
     orderNumber?: string;
   } | null;
+  payment_intent?: string | { id: string } | null;
 }
 
 export interface OrderRecordForPayment {
@@ -174,6 +175,7 @@ export type PaymentConfirmationResult =
       orderId: string;
       stripeSessionId: string;
       paymentIntentId?: string;
+      permanentFailureRecorded?: boolean;
     }
   | {
       ok: false;
@@ -182,6 +184,10 @@ export type PaymentConfirmationResult =
       status: 400 | 404 | 409;
       retryable: boolean;
       permanentFailureRecorded?: boolean;
+      orderId?: string;
+      stripeSessionId?: string;
+      discrepancyRecorded?: boolean;
+      paymentIntentId?: string;
     };
 
 async function recordPermanentValidationFailure(params: {
@@ -315,6 +321,7 @@ export async function verifyAndConfirmStripePayment(params: {
         AMOUNT_MISMATCH: 400,
         ORDER_NOT_FOUND: 404,
         ORDER_CANCELLED: 409,
+        CANCELLED_PAYMENT_DISCREPANCY: 409,
         WEBHOOK_IN_PROGRESS: 409,
       };
       return {

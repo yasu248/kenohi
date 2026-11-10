@@ -10,7 +10,7 @@
  */
 
 import type Stripe from 'stripe';
-import { updateRefundRequestStatus, type OrderRefundRequestRecord } from './store';
+import { updateRefundRequestStatus, type OrderRefundRequestRecord } from './store.ts';
 
 export interface RefundExecutionResult {
   ok: boolean;
@@ -30,8 +30,8 @@ export interface IRefundStripeClient {
   paymentIntents: {
     retrieve(
       id: string,
-      params?: Stripe.PaymentIntentRetrieveParams
-    ): Promise<Stripe.PaymentIntent>;
+      params?: any
+    ): Promise<any>;
   };
   refunds: {
     create(
@@ -41,12 +41,22 @@ export interface IRefundStripeClient {
   };
 }
 
+export type UpdateRefundStatusFn = (params: {
+  orderId: string;
+  refundStatus: 'pending' | 'processing' | 'succeeded' | 'failed';
+  stripeRefundId?: string | null;
+  lastError?: string | null;
+  requiresManualAttention?: boolean;
+  incrementAttempt?: boolean;
+}) => Promise<{ ok: boolean; code?: string }>;
+
 export async function executeOrderRefund(params: {
   refundCase: OrderRefundRequestRecord;
   stripeClient: IRefundStripeClient;
+  statusUpdater?: UpdateRefundStatusFn;
   orderNumber?: string;
 }): Promise<RefundExecutionResult> {
-  const { refundCase, stripeClient } = params;
+  const { refundCase, stripeClient, statusUpdater = updateRefundRequestStatus } = params;
 
   // 1. すでに成功している場合は二重実行をスキップ
   if (refundCase.refundStatus === 'succeeded') {
