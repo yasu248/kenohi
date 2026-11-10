@@ -27,7 +27,6 @@ function createOpenStoreState(overrides: Partial<StoreState> = {}): StoreState {
     date: '2026-11-11',
     openedAt: OPENED_AT_MORNING_MS,
     soldOutItems: [],
-    todaysTeaName: '静岡県産 さえみどり',
     ...overrides,
   };
 }
@@ -71,7 +70,7 @@ function createMockCheckoutDeps(params: {
         createdAt: OPEN_TIME_JST.toISOString(),
         orderNumber: String(1001 + createdOrders.length),
         paymentStatus: 'unpaid',
-        productionStatus: 'unstarted',
+        productionStatus: 'pending',
         fulfillmentStatus: 'not_handed_over',
         cancellationStatus: 'active',
       };
