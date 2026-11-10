@@ -305,9 +305,13 @@ export default function Home() {
     const optionDesc = optionsList.join(', ');
 
     const newCartItem: OrderItem = {
+      id: selectedItem.id,
       name: `${selectedItem.name} (${optionDesc})`,
       price: unitPrice,
       quantity,
+      jelly,
+      sweetness,
+      ice,
     };
 
     setCart((prev) => [...prev, newCartItem]);
@@ -329,12 +333,24 @@ export default function Home() {
       const res = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: cart, customerName, customerAvatar }),
+        body: JSON.stringify({
+          items: cart,
+          customerName,
+          customerAvatar,
+          totalPrice: cartTotalPrice,
+        }),
       });
 
-      if (!res.ok) throw new Error('注文セッションの作成に失敗しました');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.error === 'string' && data.error.length > 0
+            ? data.error
+            : '注文セッションの作成に失敗しました'
+        );
+      }
 
-      const { url } = await res.json();
+      const { url } = data;
       if (url) {
         window.location.href = url;
       } else {
@@ -342,7 +358,11 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
-      alert('注文の送信に失敗しました。もう一度お試しください。');
+      const errorMessage =
+        err instanceof Error && err.message
+          ? err.message
+          : '注文の送信に失敗しました。もう一度お試しください。';
+      alert(errorMessage);
       setIsSubmitting(false);
     }
   };

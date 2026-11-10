@@ -40,9 +40,11 @@ const supabase = createClient(
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
 export interface OrderItem {
+  id?: string;
   name: string;
   price: number;
   quantity: number;
+  jelly?: string;
   sweetness?: string;
   ice?: string;
 }
