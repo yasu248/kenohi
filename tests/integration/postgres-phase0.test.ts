@@ -617,7 +617,7 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       }, /permission denied for function update_store_state_tx/);
     });
 
-    it('6.2 受付停止と注文作成の直列化 & 受付停止直後のCheckout開始拒否 (採番インクリメントなし・注文INSERTなし)', () => {
+    it('6.2 受付停止と注文作成の並列実行・直列化 & 受付停止直後のCheckout開始拒否 (採番インクリメントなし・注文INSERTなし)', async () => {
       // 1. 営業中 (2026-11-11 11:00 JST = 02:00 UTC) に update_store_state_tx で店舗状態をセット
       runPsql(`
         SET ROLE service_role;
@@ -654,10 +654,13 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.equal(createOpenRes.order.id, 'ord_atomic_open_1');
       assert.equal(createOpenRes.order.status, 'unpaid');
 
-      const seqBeforeClose = querySingle(`
-        SELECT last_number FROM public.order_number_sequences
-        WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
-      `);
+      const seqBeforeClose = parseInt(
+        querySingle(`
+          SELECT last_number FROM public.order_number_sequences
+          WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
+        `),
+        10
+      );
 
       // 3. 欠品商品 (s5) の注文 -> ITEM_SOLD_OUT で拒否され、採番シーケンスが進まないこと
       const soldOutRes = JSON.parse(
@@ -680,20 +683,61 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.equal(soldOutRes.ok, false);
       assert.equal(soldOutRes.code, 'ITEM_SOLD_OUT');
 
-      // 4. 受付停止 (isManualOpen: false) 更新と複数の注文作成を並列実行し、停止後は1件も作成されず採番も進まないことを検証
-      runPsql(`
-        SET ROLE service_role;
-        SELECT public.update_store_state_tx(
-          'kenocha_main',
-          jsonb_build_object(
-            'isManualOpen', false,
-            'date', '2026-11-11',
-            'openedAt', (EXTRACT(EPOCH FROM TIMESTAMPTZ '2026-11-11T01:00:00Z') * 1000)::bigint,
-            'soldOutItems', jsonb_build_array('s5')
-          )
-        );
-      `);
+      // 4. 受付停止 (update_store_state_tx: isManualOpen=false) と 8件の注文作成 (create_mobile_order_tx) を並列実行
+      //    デッドロックが一切起きず、成功した件数分だけ正確に採番シーケンスが進む（拒否された注文は採番もINSERTも行われない）ことを検証
+      const parallelTasks: Array<Promise<{ type: 'close' | 'order'; ok: boolean }>> = [
+        new Promise((resolve, reject) => {
+          try {
+            runPsql(`
+              SET ROLE service_role;
+              SELECT public.update_store_state_tx(
+                'kenocha_main',
+                jsonb_build_object(
+                  'isManualOpen', false,
+                  'date', '2026-11-11',
+                  'openedAt', (EXTRACT(EPOCH FROM TIMESTAMPTZ '2026-11-11T01:00:00Z') * 1000)::bigint,
+                  'soldOutItems', jsonb_build_array('s5')
+                )
+              );
+            `);
+            resolve({ type: 'close', ok: true });
+          } catch (e) {
+            reject(e);
+          }
+        }),
+        ...Array.from({ length: 8 }, (_, idx) =>
+          new Promise<{ type: 'close' | 'order'; ok: boolean }>((resolve, reject) => {
+            try {
+              const out = querySingle(`
+                SET ROLE service_role;
+                SELECT public.create_mobile_order_tx(
+                  'kenocha_main',
+                  'ord_parallel_race_${idx + 1}',
+                  '[{"id":"m1","name":"緑茶ミルクティー","price":400,"quantity":1}]'::jsonb,
+                  400,
+                  '並列競合顧客_${idx + 1}',
+                  NULL,
+                  ARRAY['m1'],
+                  TIMESTAMPTZ '2026-11-11T02:01:30Z'
+                )::text;
+              `)
+                .split('\n')
+                .pop()!;
+              const parsed = JSON.parse(out);
+              resolve({ type: 'order', ok: Boolean(parsed.ok) });
+            } catch (e) {
+              reject(e);
+            }
+          })
+        ),
+      ];
 
+      const parallelResults = await Promise.all(parallelTasks);
+      const parallelCreatedCount = parallelResults.filter(
+        (r) => r.type === 'order' && r.ok
+      ).length;
+
+      // 5. 受付停止完了後の新規注文 -> 確実に STORE_CLOSED で拒否されること
       const closedRes = JSON.parse(
         querySingle(`
           SET ROLE service_role;
@@ -714,14 +758,17 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.equal(closedRes.ok, false);
       assert.equal(closedRes.code, 'STORE_CLOSED');
 
-      const seqAfterClose = querySingle(`
-        SELECT last_number FROM public.order_number_sequences
-        WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
-      `);
+      const seqAfterClose = parseInt(
+        querySingle(`
+          SELECT last_number FROM public.order_number_sequences
+          WHERE store_id = 'kenocha_main' AND order_date = '2026-11-11';
+        `),
+        10
+      );
       assert.equal(
         seqAfterClose,
-        seqBeforeClose,
-        '欠品拒否および受付停止拒否時には注文番号シーケンスが一切消費されないこと'
+        seqBeforeClose + parallelCreatedCount,
+        '受付停止前に通過した注文数と採番シーケンス増加数が完全一致し、拒否された注文では採番が一切消費されないこと'
       );
 
       const existsAfterClose = querySingle(`
@@ -783,9 +830,26 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
     });
 
     it('6.4 中断注文の売上履歴除外と過去注文 (legacy_undetermined) の売上履歴互換性検証', () => {
+      // 過去データ互換用のレコード (status='cancelled' かつ payment_status IS NULL) を投入
+      runPsql(`
+        INSERT INTO public.orders (
+          id, items, total_price, customer_name, status, order_number,
+          payment_status, production_status, fulfillment_status, cancellation_status
+        ) VALUES (
+          'legacy_cancelled_hist_1',
+          '[{"name":"緑茶","price":250,"quantity":1}]'::jsonb,
+          250,
+          '過去データ顧客',
+          'cancelled',
+          '3099',
+          NULL, NULL, NULL, NULL
+        )
+        ON CONFLICT (id) DO NOTHING;
+      `);
+
       // GET /api/orders/history と同一のSQL条件で取得した場合:
       // - ord_atomic_open_1 (status='cancelled', payment_status='unpaid', cancellation_status='cancelled') は除外される
-      // - legacy_cancelled_1 (status='cancelled', payment_status IS NULL) は保持される
+      // - legacy_cancelled_hist_1 (status='cancelled', payment_status IS NULL) は保持される
       // - ord_stripe_unpaid (payment_status='paid') は保持される
       const historyIds = querySingle(`
         SELECT string_agg(id, ',' ORDER BY id)
@@ -801,7 +865,7 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
         '決済前に中断された注文 (payment_status=unpaid) は売上履歴クエリから除外されること'
       );
       assert.equal(
-        historyIds.includes('legacy_cancelled_1'),
+        historyIds.includes('legacy_cancelled_hist_1'),
         true,
         '過去データ (payment_status IS NULL) は売上履歴クエリに保持されること'
       );
