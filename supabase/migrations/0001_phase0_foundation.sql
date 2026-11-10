@@ -406,6 +406,440 @@ END;
 $$;
 
 -- -----------------------------------------------------------------------------
+-- 4B. 注文受付停止・欠品更新とモバイル注文作成の直列化 & Checkout 競合制御 RPC
+--     ロック順序の統一（デッドロック防止）:
+--       Lock Level 1: pg_advisory_xact_lock(hashtext('store_state:' || store_id)) + orders(STORE_STATE_001)
+--       Lock Level 2: pg_advisory_xact_lock(hashtext('order_seq:' || store_id || ':' || order_date)) + order_number_sequences
+--       Lock Level 3: orders(id <> 'STORE_STATE_001')
+-- -----------------------------------------------------------------------------
+
+-- 店舗状態 (STORE_STATE_001: 開店・受付停止・欠品リスト) を排他ロック下で更新する RPC
+CREATE OR REPLACE FUNCTION public.update_store_state_tx(
+  p_store_id TEXT,
+  p_state_json JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_store_key TEXT := COALESCE(NULLIF(p_store_id, ''), 'kenocha_main');
+BEGIN
+  -- Lock Level 1: store_state アドバイザリロックを取得（注文作成・Checkout確定と直列化）
+  PERFORM pg_advisory_xact_lock(hashtext('store_state:' || v_store_key));
+
+  INSERT INTO public.orders (
+    id,
+    items,
+    total_price,
+    customer_name,
+    customer_avatar,
+    status,
+    order_number,
+    store_id,
+    source,
+    updated_at
+  )
+  VALUES (
+    'STORE_STATE_001',
+    '[]'::jsonb,
+    0,
+    'STORE_STATE',
+    p_state_json::text,
+    'cancelled',
+    '0000',
+    v_store_key,
+    'mobile',
+    NOW()
+  )
+  ON CONFLICT (id)
+  DO UPDATE SET
+    customer_avatar = EXCLUDED.customer_avatar,
+    updated_at = NOW();
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'state', p_state_json
+  );
+END;
+$$;
+
+-- 受付状態・営業時間・欠品をDBトランザクション内で検証し、注文番号採番と注文INSERTを同一トランザクションで実行する RPC
+CREATE OR REPLACE FUNCTION public.create_mobile_order_tx(
+  p_store_id TEXT,
+  p_order_id TEXT,
+  p_items JSONB,
+  p_total_price INTEGER,
+  p_customer_name TEXT,
+  p_customer_avatar TEXT DEFAULT NULL,
+  p_item_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
+  p_now TIMESTAMPTZ DEFAULT NOW()
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_store_key TEXT := COALESCE(NULLIF(p_store_id, ''), 'kenocha_main');
+  v_state_raw TEXT;
+  v_state_json JSONB;
+  v_now_ts TIMESTAMPTZ := COALESCE(p_now, NOW());
+  v_now_jst TIMESTAMP;
+  v_today_jst TEXT;
+  v_current_hour INTEGER;
+  v_opened_at_ms BIGINT;
+  v_opened_hour INTEGER;
+  v_sold_out_id TEXT;
+  v_order_number TEXT;
+  v_inserted_order public.orders%ROWTYPE;
+BEGIN
+  -- Lock Level 1: store_state ロックを取得し STORE_STATE_001 を確認
+  PERFORM pg_advisory_xact_lock(hashtext('store_state:' || v_store_key));
+
+  SELECT customer_avatar
+  INTO v_state_raw
+  FROM public.orders
+  WHERE id = 'STORE_STATE_001'
+  FOR SHARE;
+
+  IF NOT FOUND OR v_state_raw IS NULL THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'STORE_STATE_UNAVAILABLE',
+      'message', '現在、店舗の受付状態を確認できないため注文を受け付けられません。しばらくしてから再度お試しください。'
+    );
+  END IF;
+
+  BEGIN
+    v_state_json := v_state_raw::JSONB;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'STORE_STATE_UNAVAILABLE',
+      'message', '現在、店舗の受付状態を確認できないため注文を受け付けられません。しばらくしてから再度お試しください。'
+    );
+  END;
+
+  -- JST 日付と現在時刻の算出
+  v_now_jst := v_now_ts AT TIME ZONE 'Asia/Tokyo';
+  v_today_jst := to_char(v_now_jst, 'YYYY-MM-DD');
+  v_current_hour := EXTRACT(HOUR FROM v_now_jst)::INTEGER;
+
+  -- 手動開店フラグと営業日付の確認
+  IF COALESCE((v_state_json->>'isManualOpen')::BOOLEAN, FALSE) IS NOT TRUE
+     OR COALESCE(v_state_json->>'date', '') <> v_today_jst THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'STORE_CLOSED',
+      'message', '現在、注文の受付を停止しています（営業時間外または受付停止中）。'
+    );
+  END IF;
+
+  -- 15時自動クローズ判定（isStoreCurrentlyOpen と同一ロジック）
+  IF (v_state_json ? 'openedAt') AND (v_state_json->>'openedAt') ~ '^\d+$' THEN
+    v_opened_at_ms := (v_state_json->>'openedAt')::BIGINT;
+    v_opened_hour := EXTRACT(HOUR FROM (to_timestamp(v_opened_at_ms / 1000.0) AT TIME ZONE 'Asia/Tokyo'))::INTEGER;
+    IF v_current_hour >= 15 AND v_opened_hour < 15 THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'STORE_CLOSED',
+        'message', '現在、注文の受付を停止しています（営業時間外または受付停止中）。'
+      );
+    END IF;
+  ELSE
+    IF v_current_hour >= 15 THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'STORE_CLOSED',
+        'message', '現在、注文の受付を停止しています（営業時間外または受付停止中）。'
+      );
+    END IF;
+  END IF;
+
+  -- 欠品商品 (soldOutItems) のチェック
+  IF p_item_ids IS NOT NULL AND array_length(p_item_ids, 1) > 0
+     AND jsonb_typeof(v_state_json->'soldOutItems') = 'array' THEN
+    SELECT req_id
+    INTO v_sold_out_id
+    FROM unnest(p_item_ids) AS req_id
+    WHERE EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements_text(v_state_json->'soldOutItems') AS sold_id
+      WHERE sold_id = req_id
+    )
+    LIMIT 1;
+
+    IF v_sold_out_id IS NOT NULL THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'ITEM_SOLD_OUT',
+        'sold_out_id', v_sold_out_id,
+        'message', '申し訳ございません。選択された商品は現在欠品中です。'
+      );
+    END IF;
+  END IF;
+
+  -- Lock Level 2: 同一トランザクション内で注文番号を原子的採番
+  v_order_number := public.next_order_number(v_store_key, v_today_jst);
+
+  -- Lock Level 3: 同一トランザクション内で未決済注文を INSERT
+  INSERT INTO public.orders (
+    id,
+    items,
+    total_price,
+    customer_name,
+    customer_avatar,
+    status,
+    order_number,
+    store_id,
+    source,
+    external_order_id,
+    payment_status,
+    production_status,
+    fulfillment_status,
+    cancellation_status,
+    refunded_amount,
+    stripe_session_id,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    p_order_id,
+    p_items,
+    p_total_price,
+    p_customer_name,
+    p_customer_avatar,
+    'unpaid',
+    v_order_number,
+    v_store_key,
+    'mobile',
+    NULL,
+    'unpaid',
+    'pending',
+    'not_handed_over',
+    'active',
+    0,
+    NULL,
+    v_now_ts,
+    v_now_ts
+  )
+  RETURNING * INTO v_inserted_order;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'order', to_jsonb(v_inserted_order)
+  );
+END;
+$$;
+
+-- Stripe Checkout セッション発行直後に受付状態を再確認し、営業中なら stripe_session_id を記録、
+-- 受付停止・欠品化されていた場合は未決済注文を原子的に中断キャンセルする RPC
+CREATE OR REPLACE FUNCTION public.finalize_mobile_order_checkout_tx(
+  p_store_id TEXT,
+  p_order_id TEXT,
+  p_stripe_session_id TEXT,
+  p_item_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
+  p_now TIMESTAMPTZ DEFAULT NOW()
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_store_key TEXT := COALESCE(NULLIF(p_store_id, ''), 'kenocha_main');
+  v_state_raw TEXT;
+  v_state_json JSONB;
+  v_order public.orders%ROWTYPE;
+  v_now_ts TIMESTAMPTZ := COALESCE(p_now, NOW());
+  v_now_jst TIMESTAMP;
+  v_today_jst TEXT;
+  v_current_hour INTEGER;
+  v_opened_at_ms BIGINT;
+  v_opened_hour INTEGER;
+  v_sold_out_id TEXT;
+  v_reject_code TEXT := NULL;
+  v_reject_msg TEXT := NULL;
+BEGIN
+  -- Lock Level 1: store_state ロックを取得
+  PERFORM pg_advisory_xact_lock(hashtext('store_state:' || v_store_key));
+
+  SELECT customer_avatar
+  INTO v_state_raw
+  FROM public.orders
+  WHERE id = 'STORE_STATE_001'
+  FOR SHARE;
+
+  -- Lock Level 3: 対象注文を行ロック
+  SELECT *
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'ORDER_NOT_FOUND',
+      'message', '対象の注文が見つかりません。'
+    );
+  END IF;
+
+  -- 店舗状態の評価
+  IF v_state_raw IS NULL THEN
+    v_reject_code := 'STORE_STATE_UNAVAILABLE';
+    v_reject_msg := '店舗状態の確認中にエラーが発生したため、注文を中断しました。';
+  ELSE
+    BEGIN
+      v_state_json := v_state_raw::JSONB;
+    EXCEPTION WHEN OTHERS THEN
+      v_reject_code := 'STORE_STATE_UNAVAILABLE';
+      v_reject_msg := '店舗状態の確認中にエラーが発生したため、注文を中断しました。';
+    END;
+  END IF;
+
+  IF v_reject_code IS NULL THEN
+    v_now_jst := v_now_ts AT TIME ZONE 'Asia/Tokyo';
+    v_today_jst := to_char(v_now_jst, 'YYYY-MM-DD');
+    v_current_hour := EXTRACT(HOUR FROM v_now_jst)::INTEGER;
+
+    IF COALESCE((v_state_json->>'isManualOpen')::BOOLEAN, FALSE) IS NOT TRUE
+       OR COALESCE(v_state_json->>'date', '') <> v_today_jst THEN
+      v_reject_code := 'STORE_CLOSED';
+      v_reject_msg := '現在、注文の受付を停止しています（営業時間外または受付停止中）。';
+    ELSIF (v_state_json ? 'openedAt') AND (v_state_json->>'openedAt') ~ '^\d+$' THEN
+      v_opened_at_ms := (v_state_json->>'openedAt')::BIGINT;
+      v_opened_hour := EXTRACT(HOUR FROM (to_timestamp(v_opened_at_ms / 1000.0) AT TIME ZONE 'Asia/Tokyo'))::INTEGER;
+      IF v_current_hour >= 15 AND v_opened_hour < 15 THEN
+        v_reject_code := 'STORE_CLOSED';
+        v_reject_msg := '現在、注文の受付を停止しています（営業時間外または受付停止中）。';
+      END IF;
+    ELSIF v_current_hour >= 15 THEN
+      v_reject_code := 'STORE_CLOSED';
+      v_reject_msg := '現在、注文の受付を停止しています（営業時間外または受付停止中）。';
+    END IF;
+  END IF;
+
+  IF v_reject_code IS NULL
+     AND p_item_ids IS NOT NULL AND array_length(p_item_ids, 1) > 0
+     AND jsonb_typeof(v_state_json->'soldOutItems') = 'array' THEN
+    SELECT req_id
+    INTO v_sold_out_id
+    FROM unnest(p_item_ids) AS req_id
+    WHERE EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements_text(v_state_json->'soldOutItems') AS sold_id
+      WHERE sold_id = req_id
+    )
+    LIMIT 1;
+
+    IF v_sold_out_id IS NOT NULL THEN
+      v_reject_code := 'ITEM_SOLD_OUT';
+      v_reject_msg := '申し訳ございません。選択された商品は現在欠品中です。';
+    END IF;
+  END IF;
+
+  -- Stripe セッション作成中に受付停止または欠品化された場合:
+  -- 決済済み注文を決してキャンセルしないよう保護しつつ、未決済注文を中断キャンセルする
+  IF v_reject_code IS NOT NULL THEN
+    IF v_order.status = 'unpaid' AND COALESCE(v_order.payment_status, 'unpaid') = 'unpaid' THEN
+      UPDATE public.orders
+      SET
+        status = 'cancelled',
+        payment_status = 'unpaid',
+        cancellation_status = 'cancelled',
+        stripe_session_id = COALESCE(p_stripe_session_id, stripe_session_id),
+        updated_at = NOW()
+      WHERE id = p_order_id
+      RETURNING * INTO v_order;
+    END IF;
+
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', v_reject_code,
+      'sold_out_id', v_sold_out_id,
+      'message', v_reject_msg,
+      'order_cancelled', (v_order.cancellation_status = 'cancelled')
+    );
+  END IF;
+
+  -- 正常: stripe_session_id を記録して Checkout 進行中として確定
+  UPDATE public.orders
+  SET
+    stripe_session_id = p_stripe_session_id,
+    updated_at = NOW()
+  WHERE id = p_order_id
+  RETURNING * INTO v_order;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'order', to_jsonb(v_order)
+  );
+END;
+$$;
+
+-- Checkout 中断時に未決済注文のみを安全にキャンセルする RPC（決済済み注文は絶対にキャンセル・削除しない）
+CREATE OR REPLACE FUNCTION public.abort_mobile_order_checkout_tx(
+  p_order_id TEXT,
+  p_stripe_session_id TEXT DEFAULT NULL,
+  p_reason TEXT DEFAULT 'checkout_aborted'
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_order public.orders%ROWTYPE;
+BEGIN
+  -- Lock Level 3: 対象注文を行ロック
+  SELECT *
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'ORDER_NOT_FOUND'
+    );
+  END IF;
+
+  -- すでに決済完了している場合、または調理・呼出・受渡完了に進んでいる場合は絶対にキャンセルしない
+  IF COALESCE(v_order.payment_status, 'unpaid') IN ('paid', 'partially_refunded', 'refunded')
+     OR v_order.status IN ('pending', 'preparing', 'completed')
+     OR COALESCE(v_order.fulfillment_status, 'not_handed_over') = 'handed_over' THEN
+    RETURN jsonb_build_object(
+      'ok', FALSE,
+      'code', 'ALREADY_PAID',
+      'status', v_order.status,
+      'payment_status', v_order.payment_status
+    );
+  END IF;
+
+  UPDATE public.orders
+  SET
+    status = 'cancelled',
+    payment_status = 'unpaid',
+    cancellation_status = 'cancelled',
+    stripe_session_id = COALESCE(p_stripe_session_id, stripe_session_id),
+    updated_at = NOW()
+  WHERE id = p_order_id
+  RETURNING * INTO v_order;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'cancelled', TRUE,
+    'reason', p_reason,
+    'order', to_jsonb(v_order)
+  );
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- 5. スタッフ認証セッション & ログイン試行回数制限テーブル (Phase 0-B)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.auth_sessions (
@@ -443,22 +877,38 @@ ALTER TABLE public.auth_login_rate_limits ENABLE ROW LEVEL SECURITY;
 -- -----------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.update_store_state_tx(TEXT, JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
 
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
     EXECUTE 'REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM anon';
     EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_store_state_tx(TEXT, JSONB) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM anon';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL ON FUNCTION public.next_order_number(TEXT, TEXT) FROM authenticated';
     EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_store_state_tx(TEXT, JSONB) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) FROM authenticated';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.next_order_number(TEXT, TEXT) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.update_store_state_tx(TEXT, JSONB) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.create_mobile_order_tx(TEXT, TEXT, JSONB, INTEGER, TEXT, TEXT, TEXT[], TIMESTAMPTZ) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.finalize_mobile_order_checkout_tx(TEXT, TEXT, TEXT, TEXT[], TIMESTAMPTZ) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.abort_mobile_order_checkout_tx(TEXT, TEXT, TEXT) TO service_role';
   END IF;
 END $$;
 
