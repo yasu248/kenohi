@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Settings, Clock, Trash2, RefreshCw, PackageX, Package, Volume2 } from 'lucide-react';
+import { ArrowLeft, Settings, Clock, Trash2, RefreshCw, PackageX, Package, Volume2, AlertTriangle, CreditCard } from 'lucide-react';
 import styles from './admin.module.css';
 import { MENU_NAME_BY_ID } from '../../../lib/menuCatalog';
+import type { OrderRefundRequestRecord } from '../../../lib/store';
 
 // Web Audio API による「ピロリン♪」通知音（G5 -> C6 -> E6 の澄んだベルチャイム）
 function playOrderChime() {
@@ -70,17 +71,26 @@ function formatTime(ms: number): string {
 
 export default function AdminPage() {
   const [openHistory, setOpenHistory] = useState<OpenHistoryEntry[]>([]);
+  const [refundRequests, setRefundRequests] = useState<OrderRefundRequestRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isClearing, setIsClearing] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/store-state');
-      if (res.ok) {
-        const state = await res.json();
+      const [resState, resRefunds] = await Promise.all([
+        fetch('/api/store-state'),
+        fetch('/api/admin/refund-requests'),
+      ]);
+
+      if (resState.ok) {
+        const state = await resState.json();
         const history: OpenHistoryEntry[] = state.openHistory ?? [];
-        // 新しい順に並べる
         setOpenHistory([...history].reverse());
+      }
+
+      if (resRefunds.ok) {
+        const refData = await resRefunds.json();
+        setRefundRequests(refData.refundRequests ?? []);
       }
     } catch (err) {
       console.error('データ取得に失敗しました', err);
@@ -132,6 +142,144 @@ export default function AdminPage() {
       </header>
 
       <div className={styles.content}>
+
+        {/* ─── 決済・返金不整合アラート (Phase 0-G) ─── */}
+        <section
+          style={{
+            backgroundColor: refundRequests.length > 0 ? '#fff1f2' : '#ffffff',
+            borderRadius: '12px',
+            border: `1.5px solid ${refundRequests.length > 0 ? '#f43f5e' : '#e2e8f0'}`,
+            overflow: 'hidden',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)',
+            marginBottom: '24px',
+          }}
+        >
+          <div
+            style={{
+              padding: '14px 20px',
+              backgroundColor: refundRequests.length > 0 ? '#ffe4e6' : '#f8fafc',
+              borderBottom: `1px solid ${refundRequests.length > 0 ? '#fecdd3' : '#e2e8f0'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertTriangle
+                size={20}
+                color={refundRequests.length > 0 ? '#e11d48' : '#64748b'}
+              />
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: '1rem',
+                  fontWeight: 800,
+                  color: refundRequests.length > 0 ? '#9f1239' : '#1e293b',
+                }}
+              >
+                決済・返金不整合アラート（Stripe決済済み・注文取消競合）
+              </h2>
+            </div>
+            <span
+              style={{
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                padding: '2px 10px',
+                borderRadius: '12px',
+                backgroundColor: refundRequests.length > 0 ? '#e11d48' : '#e2e8f0',
+                color: refundRequests.length > 0 ? '#ffffff' : '#64748b',
+              }}
+            >
+              未解決 {refundRequests.length} 件
+            </span>
+          </div>
+
+          <div style={{ padding: '16px 20px' }}>
+            {refundRequests.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '0.875rem', color: '#64748b' }}>
+                現在、未解決の決済・返金不整合案件はありません。
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#9f1239', fontWeight: 600 }}>
+                  ⚠️ Stripe上で決済完了後に注文がキャンセルされたため、返金または確認が必要です。
+                </p>
+                {refundRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    style={{
+                      padding: '14px 16px',
+                      backgroundColor: '#ffffff',
+                      borderRadius: '8px',
+                      border: '1px solid #fecdd3',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0f172a' }}>
+                          注文 #{req.orderNumber ?? req.orderId.slice(0, 8)}
+                        </span>
+                        <span style={{ fontSize: '1rem', fontWeight: 800, color: '#e11d48' }}>
+                          ¥{req.targetRefundAmount.toLocaleString()}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            backgroundColor: req.refundStatus === 'failed' ? '#fee2e2' : '#fef3c7',
+                            color: req.refundStatus === 'failed' ? '#991b1b' : '#92400e',
+                          }}
+                        >
+                          返金状態: {req.refundStatus}
+                        </span>
+                        {req.requiresManualAttention && (
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              padding: '3px 8px',
+                              borderRadius: '4px',
+                              backgroundColor: '#f43f5e',
+                              color: '#ffffff',
+                            }}
+                          >
+                            要管理者対応
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: '0.8rem', color: '#475569', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div>
+                        <strong>Stripe Session:</strong> {req.stripeSessionId ?? 'N/A'}
+                      </div>
+                      {req.paymentIntentId && (
+                        <div>
+                          <strong>PaymentIntent:</strong> {req.paymentIntentId}
+                        </div>
+                      )}
+                      {req.lastError && (
+                        <div style={{ color: '#b91c1c' }}>
+                          <strong>エラー詳細:</strong> {req.lastError}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        検知日時: {new Date(req.createdAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} (試行: {req.attemptCount}回)
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* ─── 通知音テスト ─── */}
         <section className={styles.section}>

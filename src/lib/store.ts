@@ -14,6 +14,7 @@ import {
   type ProductionStatus,
   type FulfillmentStatus,
   type CancellationStatus,
+  type RefundStatus,
   type LegacyStatusClassification,
   type OrderStatusAction,
 } from './orderStatus.ts';
@@ -805,8 +806,8 @@ export async function getUnresolvedRefundRequests(): Promise<OrderRefundRequestR
 export async function updateRefundRequestStatus(params: {
   orderId: string;
   refundStatus: 'pending' | 'processing' | 'succeeded' | 'failed';
-  stripeRefundId?: string;
-  lastError?: string;
+  stripeRefundId?: string | null;
+  lastError?: string | null;
   requiresManualAttention?: boolean;
   incrementAttempt?: boolean;
 }): Promise<{ ok: boolean; code?: string }> {
