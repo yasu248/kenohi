@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
         amount_total: session.amount_total,
         currency: session.currency,
         metadata: session.metadata,
+        payment_intent: session.payment_intent,
       },
       repo: supabasePaymentRepository,
     });
