@@ -7,110 +7,11 @@ import styles from './page.module.css';
 import { liffManager, LiffUserProfile } from '../lib/liffHelper';
 import type { OrderItem } from '../lib/store';
 import { isBusinessHours, isStoreCurrentlyOpen } from '../lib/businessHours';
+import { MENU_CATALOG, type MenuCatalogItem } from '../lib/menuCatalog';
 
-type MenuCategory = 'straight' | 'milk' | 'soda';
+type MenuItem = MenuCatalogItem;
 
-interface MenuItem {
-  id: string;
-  name: string;
-  desc: string;
-  price: number;
-  image: string;
-  category: MenuCategory;
-}
-
-const MENU_ITEMS: MenuItem[] = [
-  // ストレートティー 
-  {
-    id: 's1',
-    name: '本日のお茶',
-    desc: '日替わりのお茶、本日の茶葉はスタッフまでお尋ねください',
-    price: 250,
-    image: '/daily_special_tea.jpg',
-    category: 'straight',
-  },
-  {
-    id: 's2',
-    name: '緑茶',
-    desc: '清涼感あふれる青みと、ほのかな甘みが口に広がるシンプルな一杯。\n神奈川県丹沢の茶葉を使用。',
-    price: 250,
-    image: '/ryokucha_sq.jpg',
-    category: 'straight',
-  },
-  {
-    id: 's3',
-    name: '釜炒り緑茶',
-    desc: '日本伝統の釜炒り製法による、独特の香ばしい「釜香」と、すっきりとした上品な後味が楽しめる一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
-    price: 250,
-    image: '/kamairicha_sq.jpg',
-    category: 'straight',
-  },
-  {
-    id: 's4',
-    name: '青茶',
-    desc: '烏龍茶ならではの花のような香りと、発酵の深みが調和した上品な風味をストレートで。\n純国産の茶葉を使用。',
-    price: 250,
-    image: '/aocha_sq.jpg',
-    category: 'straight',
-  },
-  {
-    id: 's5',
-    name: 'ほうじ茶',
-    desc: '深く焙煎した茶葉の香ばしさとまろやかな口当たり。ほっと落ち着く、和の温かみを感じる一杯。\n滋賀県近江の茶葉を使用。',
-    price: 250,
-    image: '/hojicha_sq.jpg',
-    category: 'straight',
-  },
-  // ミルクティー
-  {
-    id: 'm1',
-    name: '緑茶ミルクティー',
-    desc: '緑茶のすっきりした渋みと、なめらかなミルクが溶け合う爽やかなミルクティー。\n神奈川県丹沢の茶葉を使用。',
-    price: 400,
-    image: '/ryokucha_milk_sq.jpg',
-    category: 'milk',
-  },
-  {
-    id: 'm2',
-    name: '釜炒り緑茶ミルクティー',
-    desc: '日本伝統の釜炒り製法による「釜香」の香ばしさと、ミルクのコクが引き立つ一杯。\n宮崎県五ヶ瀬の茶葉を使用。',
-    price: 400,
-    image: '/kamairicha_milk_sq.jpg',
-    category: 'milk',
-  },
-  {
-    id: 'm3',
-    name: '青茶ミルクティー',
-    desc: '烏龍茶の華やかな香りとフレッシュミルクが出会う、個性的でリッチなミルクティー。\n純国産の茶葉を使用。',
-    price: 400,
-    image: '/aocha_milk_sq.jpg',
-    category: 'milk',
-  },
-  {
-    id: 'm4',
-    name: 'ほうじ茶ミルクティー',
-    desc: '香ばしく煎り上げたほうじ茶の豊かな香りと、コクのあるミルクが絶妙に調和した人気の一杯。\n滋賀県近江の茶葉を使用。',
-    price: 400,
-    image: '/hojicha_milk_sq.jpg',
-    category: 'milk',
-  },
-  {
-    id: 'm5',
-    name: '金木犀青茶ミルクティー',
-    desc: '爽やかな金木犀の香りを纏わせた華やかでリッチなミルクティー。\n※甘さなしにできません',
-    price: 400,
-    image: '/aocha_milk_sq.jpg',
-    category: 'milk',
-  },
-  {
-    id: 'm6',
-    name: '薔薇ほうじ茶ミルクティー',
-    desc: 'ローズの豊かな香りと香ばしさが絶妙に調和した上品なミルクティー。\n※甘さなしにできません',
-    price: 400,
-    image: '/hojicha_milk_sq.jpg',
-    category: 'milk',
-  },
-];
+const MENU_ITEMS: readonly MenuItem[] = MENU_CATALOG;
 
 export default function Home() {
   const [profile, setProfile] = useState<LiffUserProfile | null>(null);
@@ -627,7 +528,7 @@ export default function Home() {
               <span className={styles.optionTitle}>甘さ</span>
               <div className={styles.optionsGrid}>
                 {['普通', '控えめ', 'なし'].map((s) => {
-                  const isDisabled = s === 'なし' && (selectedItem.id === 'm5' || selectedItem.id === 'm6');
+                  const isDisabled = s === 'なし' && !selectedItem.allowZeroSweetness;
                   return (
                     <React.Fragment key={s}>
                       <input

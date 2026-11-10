@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Settings, Clock, Trash2, RefreshCw, PackageX, Package, Volume2 } from 'lucide-react';
 import styles from './admin.module.css';
+import { MENU_NAME_BY_ID } from '../../../lib/menuCatalog';
 
 // Web Audio API による「ピロリン♪」通知音（G5 -> C6 -> E6 の澄んだベルチャイム）
 function playOrderChime() {
@@ -48,12 +49,8 @@ function playOrderChime() {
   } catch (e) {}
 }
 
-// メニューIDから商品名へのマッピング（sold-out/page.tsxと同期）
-const MENU_NAME: Record<string, string> = {
-  s1: '本日のお茶', s2: '緑茶', s3: '釜炒り緑茶', s4: '青茶', s5: 'ほうじ茶',
-  m1: '緑茶ミルクティー', m2: '釜炒り緑茶ミルクティー', m3: '青茶ミルクティー',
-  m4: 'ほうじ茶ミルクティー', m5: '金木犀青茶ミルクティー', m6: '薔薇ほうじ茶ミルクティー',
-};
+// メニューIDから商品名へのマッピング（共通マスター menuCatalog.ts から参照）
+const MENU_NAME: Readonly<Record<string, string>> = MENU_NAME_BY_ID;
 
 interface OpenHistoryEntry {
   date: string;

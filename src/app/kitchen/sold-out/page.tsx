@@ -3,29 +3,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ArrowLeft, PackageX, Package, AlertTriangle, Save, Check, RefreshCw, X } from 'lucide-react';
 import styles from './sold-out.module.css';
+import { MENU_CATALOG, type MenuCatalogItem } from '../../../lib/menuCatalog';
 
-// メニューアイテム定義（page.tsxと同期させる）
-interface MenuItem {
-  id: string;
-  name: string;
-  price: number;
-  category: 'straight' | 'milk' | 'soda';
-  image: string;
-}
+type MenuItem = MenuCatalogItem;
 
-const MENU_ITEMS: MenuItem[] = [
-  { id: 's1', name: '本日のお茶', price: 250, category: 'straight', image: '/daily_special_tea.jpg' },
-  { id: 's2', name: '緑茶', price: 250, category: 'straight', image: '/ryokucha_sq.jpg' },
-  { id: 's3', name: '釜炒り緑茶', price: 250, category: 'straight', image: '/kamairicha_sq.jpg' },
-  { id: 's4', name: '青茶', price: 250, category: 'straight', image: '/aocha_sq.jpg' },
-  { id: 's5', name: 'ほうじ茶', price: 250, category: 'straight', image: '/hojicha_sq.jpg' },
-  { id: 'm1', name: '緑茶ミルクティー', price: 400, category: 'milk', image: '/ryokucha_milk_sq.jpg' },
-  { id: 'm2', name: '釜炒り緑茶ミルクティー', price: 400, category: 'milk', image: '/kamairicha_milk_sq.jpg' },
-  { id: 'm3', name: '青茶ミルクティー', price: 400, category: 'milk', image: '/aocha_milk_sq.jpg' },
-  { id: 'm4', name: 'ほうじ茶ミルクティー', price: 400, category: 'milk', image: '/hojicha_milk_sq.jpg' },
-  { id: 'm5', name: '金木犀青茶ミルクティー', price: 400, category: 'milk', image: '/aocha_milk_sq.jpg' },
-  { id: 'm6', name: '薔薇ほうじ茶ミルクティー', price: 400, category: 'milk', image: '/hojicha_milk_sq.jpg' },
-];
+const MENU_ITEMS: readonly MenuItem[] = MENU_CATALOG;
 
 const CATEGORY_LABELS: Record<string, string> = {
   straight: 'ストレートティー',
