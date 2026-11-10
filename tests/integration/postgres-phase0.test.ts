@@ -38,6 +38,15 @@ function querySingle(sql: string, user: string = 'postgres'): string {
   return runPsql(sql, user);
 }
 
+function queryJson(sql: string, user: string = 'postgres'): any {
+  const raw = runPsql(sql, user);
+  const lines = raw.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{') || l.startsWith('['));
+  if (lines.length === 0) {
+    throw new Error(`No JSON output found in psql response:\n${raw}`);
+  }
+  return JSON.parse(lines[lines.length - 1]);
+}
+
 function isDockerAvailable(): boolean {
   try {
     execFileSync('docker', ['ps'], { stdio: 'ignore' });
@@ -1002,19 +1011,26 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
     });
 
     it('7.2 record_cancelled_payment_discrepancy_tx による決済不整合の原子的永続化とWebhook succeeded確定', () => {
-      // キャンセル済み注文を準備
+      // クリーンアップ & キャンセル済み注文を準備 (customer_name NOT NULL を満たす)
       runPsql(`
+        DELETE FROM public.order_refund_requests WHERE order_id = 'ord_pg_disc_1';
+        DELETE FROM public.stripe_webhook_events WHERE event_id = 'evt_pg_disc_1';
         INSERT INTO public.orders (
-          id, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, refund_status, requires_manual_attention
         ) VALUES (
-          'ord_pg_disc_1', '3801', 1400, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled'
-        ) ON CONFLICT (id) DO UPDATE SET status = 'cancelled', payment_status = 'unpaid', cancellation_status = 'cancelled';
+          'ord_pg_disc_1', 'テスト客', '3801', 1400, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled', 'none', false
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled',
+          payment_status = 'unpaid',
+          cancellation_status = 'cancelled',
+          refund_status = 'none',
+          requires_manual_attention = false;
       `);
 
       // service_role で RPC 実行
-      const rpcJson = runPsqlAsRole(
-        'service_role',
-        `SELECT public.record_cancelled_payment_discrepancy_tx(
+      const res = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
           'ord_pg_disc_1',
           'cs_test_pg_disc_1',
           'pi_test_pg_disc_1',
@@ -1022,9 +1038,8 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
           'jpy',
           'evt_pg_disc_1',
           'cancelled_order_payment_received'
-        );`
-      );
-      const res = JSON.parse(rpcJson);
+        );
+      `);
       assert.equal(res.ok, true);
       assert.equal(res.order_id, 'ord_pg_disc_1');
       assert.equal(res.refund_request.refund_status, 'pending');
@@ -1047,9 +1062,9 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
 
     it('7.3 同一注文に対する record_cancelled_payment_discrepancy_tx の再送・重複防止 (ON CONFLICT 冪等性)', () => {
       // 2回目の呼び出し（同一注文・同一イベント再送）
-      const rpcJson2 = runPsqlAsRole(
-        'service_role',
-        `SELECT public.record_cancelled_payment_discrepancy_tx(
+      const res2 = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
           'ord_pg_disc_1',
           'cs_test_pg_disc_1',
           'pi_test_pg_disc_1',
@@ -1057,9 +1072,8 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
           'jpy',
           'evt_pg_disc_1',
           'replayed_event'
-        );`
-      );
-      const res2 = JSON.parse(rpcJson2);
+        );
+      `);
       assert.equal(res2.ok, true);
 
       // order_refund_requests に重複行が生成されていないこと（COUNT = 1）
@@ -1071,18 +1085,17 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
 
     it('7.4 update_refund_request_status_tx による返金完了と注文テーブルの整合性更新', () => {
       // 返金成功を記録
-      const updateJson = runPsqlAsRole(
-        'service_role',
-        `SELECT public.update_refund_request_status_tx(
+      const updateRes = queryJson(`
+        SET ROLE service_role;
+        SELECT public.update_refund_request_status_tx(
           'ord_pg_disc_1',
           'succeeded',
           're_test_pg_succ_1',
           NULL,
           NULL,
           true
-        );`
-      );
-      const updateRes = JSON.parse(updateJson);
+        );
+      `);
       assert.equal(updateRes.ok, true);
       assert.equal(updateRes.refund_request.refund_status, 'succeeded');
       assert.equal(updateRes.refund_request.requires_manual_attention, false);
@@ -1096,26 +1109,25 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
     });
 
     it('7.5 過去注文 (legacy_undetermined) に対する返金案件登録の保護拒否', () => {
-      // 過去の cancelled 注文（payment_status / cancellation_status が NULL）
+      // 過去の cancelled 注文（payment_status / cancellation_status が NULL, customer_name NOT NULL）
       runPsql(`
         INSERT INTO public.orders (
-          id, order_number, total_price, status, payment_status, cancellation_status
+          id, customer_name, order_number, total_price, status, payment_status, cancellation_status
         ) VALUES (
-          'ord_pg_legacy_prot_1', '1099', 1200, 'cancelled', NULL, NULL
+          'ord_pg_legacy_prot_1', '昔の客', '1099', 1200, 'cancelled', NULL, NULL
         ) ON CONFLICT (id) DO UPDATE SET status = 'cancelled', payment_status = NULL, cancellation_status = NULL;
       `);
 
-      const rpcJson = runPsqlAsRole(
-        'service_role',
-        `SELECT public.record_cancelled_payment_discrepancy_tx(
+      const res = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
           'ord_pg_legacy_prot_1',
           'cs_test_legacy',
           'pi_test_legacy',
           1200,
           'jpy'
-        );`
-      );
-      const res = JSON.parse(rpcJson);
+        );
+      `);
       assert.equal(res.ok, false);
       assert.equal(res.code, 'LEGACY_ORDER_PROTECTED');
 
