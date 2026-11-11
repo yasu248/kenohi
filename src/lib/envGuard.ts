@@ -29,11 +29,21 @@ export function validateEnvironmentSafety(env: Record<string, string | undefined
   }
 
   // 2. 本番Supabase URLが指定された環境下でテスト/ステージングが起動されるのを遮断
+  const knownProductionProjectRefs = ['liyjwvgtavfjiohwryox'];
   const prodSupabaseRef = env.PRODUCTION_SUPABASE_PROJECT_REF;
-  if (isStagingOrTest && prodSupabaseRef && supabaseUrl.includes(prodSupabaseRef)) {
-    errors.push(
-      `CRITICAL_CONFIG_ERROR: Production Supabase URL (${prodSupabaseRef}) detected in staging/test environment. Execution halted.`
-    );
+  if (prodSupabaseRef) {
+    knownProductionProjectRefs.push(prodSupabaseRef);
+  }
+
+  if (isStagingOrTest) {
+    for (const ref of knownProductionProjectRefs) {
+      if (supabaseUrl.includes(ref)) {
+        errors.push(
+          `CRITICAL_CONFIG_ERROR: Production Supabase project (${ref}) detected in staging/test environment. Access blocked to protect production data.`
+        );
+        break;
+      }
+    }
   }
 
   return {

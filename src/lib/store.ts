@@ -31,8 +31,12 @@ import {
   type PaymentRejectionCode,
   type WebhookEventAcquisitionResult,
 } from './stripeConfirmation.ts';
+import { assertStagingEnvironmentSafe } from './envGuard.ts';
 
 // サーバーサイド専用クライアント（Secret Key 使用）
+// ステージング/テスト環境で本番Supabaseや本番Stripeキーが設定されていないかを安全ガード
+assertStagingEnvironmentSafe();
+
 const supabase = createClient(
   process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
   process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key'
