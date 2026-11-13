@@ -106,6 +106,49 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
   };
 
   describe('2. マイグレーションの検証', () => {
+    it('2.0 完全新規の空DBに対する 0001_phase0_foundation.sql 初回適用検証 (ステージング初期化互換)', () => {
+      // 完全に全テーブル・関数をDROPしたまっさらな空DBを準備
+      runPsql(`
+        DROP TABLE IF EXISTS public.orders CASCADE;
+        DROP TABLE IF EXISTS public.order_number_sequences CASCADE;
+        DROP TABLE IF EXISTS public.stripe_webhook_events CASCADE;
+        DROP TABLE IF EXISTS public.order_refund_requests CASCADE;
+        DROP TABLE IF EXISTS public.auth_sessions CASCADE;
+        DROP TABLE IF EXISTS public.auth_login_rate_limits CASCADE;
+      `);
+
+      // 空DBに 0001_phase0_foundation.sql を適用
+      const migrationSql = readFileSync(MIGRATION_FILE_PATH, 'utf8');
+      assert.doesNotThrow(() => {
+        runPsql(migrationSql);
+      }, '空DBに対してマイグレーションが正常に適用できること');
+
+      // orders テーブルと初期店舗状態レコードが安全に作成されていること
+      const ordersCount = querySingle(`SELECT count(*) FROM public.orders;`);
+      assert.equal(ordersCount, '1', '初期店舗状態レコード STORE_STATE_001 のみが作成されていること');
+
+      const storeStateId = querySingle(`SELECT id FROM public.orders WHERE id = 'STORE_STATE_001';`);
+      assert.equal(storeStateId, 'STORE_STATE_001');
+
+      // 全8個のRPCが存在すること
+      const rpcCount = querySingle(`
+        SELECT count(*) FROM pg_proc p
+        JOIN pg_namespace n ON p.pronamespace = n.oid
+        WHERE n.nspname = 'public'
+          AND p.proname IN (
+            'next_order_number',
+            'confirm_stripe_order_payment_tx',
+            'update_store_state_tx',
+            'create_mobile_order_tx',
+            'finalize_mobile_order_checkout_tx',
+            'abort_mobile_order_checkout_tx',
+            'record_cancelled_payment_discrepancy_tx',
+            'update_refund_request_status_tx'
+          );
+      `);
+      assert.equal(rpcCount, '8', '全8個のRPC関数が作成されていること');
+    });
+
     it('2.1 & 2.2 既存注文が存在するDBへのSQL初回適用とステータスバックフィル検証', () => {
       resetToLegacySchema();
 
@@ -167,9 +210,16 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       `);
       assert.equal(cancelledRow, 'NULL|NULL|NULL', '過去のcancelled注文は4軸ステータスがNULLで保全されていること');
 
-      // STORE_STATE_001 のデータ保全
-      const storeStateAvatar = querySingle(`SELECT customer_avatar FROM public.orders WHERE id = 'STORE_STATE_001';`);
-      assert.ok(storeStateAvatar.includes('"lastOrderNumber":3104'));
+      // STORE_STATE_001 のデータ保全 (シード処理で既存レコードが上書きされないこと)
+      const storeStateRaw = querySingle(`
+        SELECT row_to_json(t)::text
+        FROM (SELECT id, customer_name, customer_avatar, items FROM public.orders WHERE id = 'STORE_STATE_001') t;
+      `);
+      const storeState = JSON.parse(storeStateRaw);
+      assert.equal(storeState.id, 'STORE_STATE_001');
+      assert.equal(storeState.customer_name, 'STORE_STATE', '既存のcustomer_nameが維持されること');
+      assert.ok(storeState.customer_avatar.includes('"lastOrderNumber":3104'), '既存のavatar/店舗状態が維持されること');
+      assert.ok(storeState.customer_avatar.includes('"date":"2026-11-10"'), '既存のdateがシード値で上書きされないこと');
     });
 
     it('2.3 マイグレーション再実行（Idempotency）の安全性検証', () => {

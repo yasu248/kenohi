@@ -37,10 +37,31 @@ import { assertStagingEnvironmentSafe } from './envGuard.ts';
 // ステージング/テスト環境で本番Supabaseや本番Stripeキーが設定されていないかを安全ガード
 assertStagingEnvironmentSafe();
 
-const supabase = createClient(
-  process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
-  process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key'
-);
+export function normalizeSupabaseUrl(url: string): string {
+  let normalized = url.trim();
+  normalized = normalized.replace(/\/+$/, '');
+  normalized = normalized.replace(/\/rest\/v1\/?$/, '');
+  return normalized.replace(/\/+$/, '');
+}
+
+export function createStoreSupabaseClient() {
+  const rawUrl = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY;
+  const isTest = (process.env.NODE_ENV === 'test' || !process.env.NODE_ENV) && process.env.APP_ENV !== 'staging';
+
+  if (!rawUrl || !key || rawUrl.includes('placeholder') || key.includes('placeholder')) {
+    if (isTest) {
+      return createClient('https://placeholder.supabase.co', 'placeholder_secret_key');
+    }
+    throw new Error(
+      '[Supabase] Missing or placeholder SUPABASE_URL or SUPABASE_SECRET_KEY in non-test environment. Process halted to prevent invalid fallback.'
+    );
+  }
+  const url = normalizeSupabaseUrl(rawUrl);
+  return createClient(url, key);
+}
+
+export const supabase = createStoreSupabaseClient();
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 

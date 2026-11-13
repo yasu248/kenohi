@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:staging": "node --experimental-strip-types scripts/start-staging.ts",
+    "verify:staging": "node --env-file=.env.staging.local --experimental-strip-types scripts/verify-supabase-staging.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

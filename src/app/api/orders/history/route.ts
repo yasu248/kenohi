@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { authorizeStaffRequest } from '../../../../lib/auth';
-import { supabaseAuthPersistenceStore, toOrder } from '../../../../lib/store';
+import { supabaseAuthPersistenceStore, toOrder, supabase } from '../../../../lib/store';
 import { shouldIncludeOrderInSalesHistory } from '../../../../lib/orderStatus';
-
-const supabase = createClient(
-  process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
-  process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key'
-);
 
 export const dynamic = 'force-dynamic';
 

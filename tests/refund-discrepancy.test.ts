@@ -361,9 +361,9 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
   });
 
   it('7. 環境変数ガード: 本番キー (sk_live_) および本番Supabase URLがステージング/テスト環境で検出された場合に遮断すること', () => {
-    // 正常なテスト環境
+    // 正常なテスト環境 (test 環境)
     const valid = validateEnvironmentSafety({
-      APP_ENV: 'staging',
+      APP_ENV: 'test',
       STRIPE_SECRET_KEY: 'sk_test_valid_key',
       SUPABASE_URL: 'https://staging-project.supabase.co',
     });
@@ -371,7 +371,7 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
 
     // 本番Stripeキーが設定されている場合は遮断
     const prodStripe = validateEnvironmentSafety({
-      APP_ENV: 'staging',
+      APP_ENV: 'test',
       STRIPE_SECRET_KEY: 'sk_live_dangerous_prod_key',
       SUPABASE_URL: 'https://staging-project.supabase.co',
     });
@@ -382,7 +382,7 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
     assert.throws(
       () =>
         assertStagingEnvironmentSafe({
-          APP_ENV: 'staging',
+          APP_ENV: 'test',
           STRIPE_SECRET_KEY: 'sk_live_123',
         }),
       /Production Stripe key/

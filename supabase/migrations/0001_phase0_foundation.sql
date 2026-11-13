@@ -15,6 +15,33 @@
 BEGIN;
 
 -- -----------------------------------------------------------------------------
+-- 0. orders テーブルの作成（新規検証環境用）および初期シード
+-- ※ 既存DB（本番）では IF NOT EXISTS により既存テーブルがそのまま維持され、
+--   新規空DB（ステージング等）では基盤テーブルが安全に初期化されます。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.orders (
+  id TEXT PRIMARY KEY,
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  total_price INTEGER NOT NULL DEFAULT 0,
+  customer_name TEXT NOT NULL DEFAULT '',
+  customer_avatar TEXT,
+  status TEXT NOT NULL DEFAULT 'unpaid',
+  order_number TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 店舗状態レコード (STORE_STATE_001) の初期シード（新規環境用）
+INSERT INTO public.orders (id, customer_name, status, order_number, items)
+VALUES (
+  'STORE_STATE_001',
+  '店舗状態管理レコード',
+  'active',
+  '0',
+  '{"isManualOpen": true, "soldOutItems": [], "date": "2026-11-13"}'::jsonb
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- -----------------------------------------------------------------------------
 -- 1. orders テーブルの非破壊カラム拡張
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.orders
