@@ -6,6 +6,7 @@
     "dev": "next dev",
     "dev:staging": "node --experimental-strip-types scripts/start-staging.ts",
     "verify:staging": "node --env-file=.env.staging.local --experimental-strip-types scripts/verify-supabase-staging.ts",
+    "test:e2e:staging": "node --env-file=.env.staging.local --experimental-strip-types scripts/e2e-stripe-staging.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
