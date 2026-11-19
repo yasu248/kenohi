@@ -423,13 +423,6 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
   };
 }
 
-  return {
-    supabaseUrl,
-    isNewFormat,
-    rpcResults,
-  };
-}
-
 // CLIから直接実行された場合
 if (process.argv[1]?.endsWith('verify-supabase-staging.ts')) {
   verifyStagingSupabase()

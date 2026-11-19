@@ -68,6 +68,30 @@ export function loadAndVerifyStagingEnv(): Record<string, string> {
     throw new Error('CRITICAL_CONFIG_ERROR: STRIPE_SECRET_KEY must start with sk_test_ in staging.');
   }
 
+  // 6. 公開キーの厳格検証 (フォールバック廃止・Fail-Fast)
+  const supabasePubKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '';
+  if (!supabasePubKey.startsWith('sb_publishable_')) {
+    throw new Error('CRITICAL_CONFIG_ERROR: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must start with sb_publishable_ in staging.');
+  }
+
+  const stripePubKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '';
+  if (!stripePubKey.startsWith('pk_test_')) {
+    throw new Error('CRITICAL_CONFIG_ERROR: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY must start with pk_test_ in staging.');
+  }
+
+  // 7. 親プロセスからの本番環境変数の混入検知
+  const knownProductionRef = 'liyjwvgtavfjiohwryox';
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === 'string') {
+      if (v.includes(knownProductionRef)) {
+        throw new Error(`CRITICAL: Production Supabase Ref detected in environment variable ${k}. Startup halted.`);
+      }
+      if (k.includes('STRIPE') && v.startsWith('sk_live_')) {
+        throw new Error(`CRITICAL: Production Stripe Key detected in environment variable ${k}. Startup halted.`);
+      }
+    }
+  }
+
   return parsedEnv;
 }
 
