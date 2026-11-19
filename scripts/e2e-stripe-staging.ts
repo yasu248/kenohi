@@ -395,7 +395,7 @@ export async function runStagingE2E() {
         object: {
           id: sessionId2,
           object: 'checkout.session',
-          amount_total: 650,
+          amount_total: 400,
           currency: 'jpy',
           payment_status: 'paid',
           metadata: {
