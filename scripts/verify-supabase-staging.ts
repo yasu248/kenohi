@@ -93,20 +93,21 @@ export interface RpcVerificationResult {
   serviceRoleMessage: string;
   anonStatus: number | string;
   anonMessage: string;
+  authenticatedStatus: number | string;
+  authenticatedMessage: string;
   isSecured: boolean;
 }
 
 export async function verifyStagingSupabase(env: Record<string, string | undefined> = process.env) {
-  console.log('=== [1. 環境変数安全ガード検証] ===');
+  console.log('=== [1. 環境変数安全ガード検証 (厳密性・フォールバック廃止)] ===');
   const safety = validateEnvironmentSafety(env);
   if (!safety.safe) {
     console.error('❌ 安全ガードにより検証を中止しました:');
     safety.errors.forEach((err) => console.error(`  - ${err}`));
     throw new Error(`Environment safety validation failed: ${safety.errors.join('; ')}`);
   }
-  console.log('✅ 環境変数の安全性検証をクリアしました (本番Ref拒否・Stripeテストキー確認完了)');
 
-  // 本番環境遮断・ステージング限定の厳格な二重防壁
+  // 1. 本番環境遮断・ステージング限定の厳格な三重防壁
   if (env.APP_ENV !== 'staging') {
     throw new Error('CRITICAL: verify:staging can ONLY be executed when APP_ENV=staging. Execution halted.');
   }
@@ -119,55 +120,118 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
     throw new Error('CRITICAL: verify:staging target URL does not match dedicated staging ref (zqcniawwhtnfcxkkwauu). Execution blocked.');
   }
 
+  // 2. キーの厳格取得 (フォールバック・推測完全廃止 & Fail-Fast)
+  const publishableKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!publishableKey || !publishableKey.startsWith('sb_publishable_')) {
+    throw new Error(
+      'CRITICAL_CONFIG_ERROR: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY is required and must start with sb_publishable_. Fallback detection is disabled.'
+    );
+  }
+
+  const stripeSecretKey = env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey || !stripeSecretKey.startsWith('sk_test_')) {
+    throw new Error('CRITICAL_CONFIG_ERROR: STRIPE_SECRET_KEY must start with sk_test_ in staging.');
+  }
+
+  const stripePublishableKey = env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+  if (!stripePublishableKey || !stripePublishableKey.startsWith('pk_test_')) {
+    throw new Error(
+      'CRITICAL_CONFIG_ERROR: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY must start with pk_test_. Supabase keys cannot be used here.'
+    );
+  }
+
+  console.log('✅ 環境変数の安全性・厳格性検証をクリアしました (本番Ref遮断・Stripe/Supabaseキー形式確認完了)');
+
   const supabaseUrl = normalizeSupabaseUrl(rawUrl);
   const secretKey = env.SUPABASE_SECRET_KEY!;
 
   // 秘密鍵の値を表示せず、形式のみ確認
   const keyPrefix = secretKey.substring(0, Math.min(10, secretKey.indexOf('_') + 1 || 10));
   const isNewFormat = secretKey.startsWith('sb_secret_');
-  console.log(`- Supabase URL (生設定値): ${rawUrl}`);
-  if (rawUrl !== supabaseUrl) {
-    console.log(`- Supabase URL (正規化後): ${supabaseUrl} (末尾の /rest/v1 等を除去してSDK互換に調整)`);
-  }
-  console.log(`- Secret Key 形式: ${isNewFormat ? '新形式 (sb_secret_*)' : '旧形式/その他 (プレフィックス: ' + keyPrefix + '...)'}`);
-  console.log(`- 秘密鍵の平文出力: なし (マスク保護)`);
+  console.log(`- Supabase URL: ${supabaseUrl}`);
+  console.log(`- Supabase Secret Key 形式: ${isNewFormat ? '新形式 (sb_secret_*)' : '旧形式/その他'}`);
+  console.log(`- Supabase Publishable Key 形式: 新形式 (${publishableKey.substring(0, 15)}...)`);
+  console.log(`- Stripe Secret Key 形式: テストキー (${stripeSecretKey.substring(0, 8)}...)`);
+  console.log(`- Stripe Publishable Key 形式: テストキー (${stripePublishableKey.substring(0, 8)}...)`);
+  console.log(`- 秘密情報・パスワード平文出力: なし (マスク保護)`);
 
   const client = createClient(supabaseUrl, secretKey);
 
-  console.log('\n=== [2. PostgREST 基本接続確認] ===');
-  // テーブルまたはスキーマの疎通確認 (orders テーブルの存在チェック)
-  const { data: tableData, error: tableError } = await client
-    .from('orders')
-    .select('id')
-    .limit(1);
-
+  console.log('\n=== [2. PostgREST 基本接続および事前スナップショット測定] ===');
+  // テーブル疎通確認
+  const { data: tableData, error: tableError } = await client.from('orders').select('id').limit(1);
   if (tableError) {
-    console.log(`- テーブル疎通状態: HTTP ${tableError.code || 'ERR'} (${tableError.message})`);
-    if (tableError.code === '42P01' || tableError.message.includes('does not exist')) {
-      console.log('  -> orders テーブルはまだ未作成です (マイグレーション未適用状態)');
+    throw new Error(`Failed to connect to orders table: ${tableError.message}`);
+  }
+  console.log('✅ orders テーブルへの接続に成功しました');
+
+  // 事前スナップショット測定 (副作用検証用)
+  const { count: preOrderCount, error: preCountErr } = await client
+    .from('orders')
+    .select('*', { count: 'exact', head: true });
+  if (preCountErr) throw new Error(`Snapshot error (orders count): ${preCountErr.message}`);
+
+  const { data: preStoreState, error: preStateErr } = await client
+    .from('orders')
+    .select('id, items, customer_avatar, status, customer_name')
+    .eq('id', 'STORE_STATE_001')
+    .single();
+  if (preStateErr) throw new Error(`Snapshot error (STORE_STATE_001): ${preStateErr.message}`);
+
+  const { data: preSeqData, error: preSeqErr } = await client
+    .from('order_number_sequences')
+    .select('store_id, order_date, last_number')
+    .eq('store_id', 'kenocha_main');
+  if (preSeqErr) throw new Error(`Snapshot error (order_number_sequences): ${preSeqErr.message}`);
+
+  console.log(`- 事前注文件数: ${preOrderCount ?? 0} 件`);
+  console.log(`- 事前 STORE_STATE_001 状態: 取得完了 (hash=${JSON.stringify(preStoreState).length} bytes)`);
+  console.log(`- 事前 kenocha_main 採番レコード数: ${preSeqData?.length ?? 0} 件`);
+
+  console.log('\n=== [3. authenticated ロール一時テストセッションの準備] ===');
+  let authClient: any = null;
+  let tempUserId: string | null = null;
+  const tempUserEmail = `acl_verify_${Date.now()}@example.internal`;
+  const tempUserPassword = `TempAuthPass_${Date.now()}_RandomSecure!`;
+
+  try {
+    const { data: createdUser, error: createErr } = await client.auth.admin.createUser({
+      email: tempUserEmail,
+      password: tempUserPassword,
+      email_confirm: true,
+    });
+
+    if (createErr || !createdUser.user) {
+      console.warn(`⚠️ 一時テストユーザー作成不可 (${createErr?.message})。authenticatedテストはスキップしSQL監査結果を参照します。`);
+    } else {
+      tempUserId = createdUser.user.id;
+      // ユーザーとしてサインインしてアクセストークンを取得
+      const userSignInClient = createClient(supabaseUrl, publishableKey);
+      const { data: signInData, error: signInErr } = await userSignInClient.auth.signInWithPassword({
+        email: tempUserEmail,
+        password: tempUserPassword,
+      });
+
+      if (signInErr || !signInData.session) {
+        console.warn(`⚠️ サインイン不可 (${signInErr?.message})。authenticatedテストはスキップします。`);
+      } else {
+        authClient = createClient(supabaseUrl, publishableKey, {
+          global: {
+            headers: {
+              Authorization: `Bearer ${signInData.session.access_token}`,
+            },
+          },
+        });
+        console.log(`✅ authenticated ロール用テストセッション取得成功 (User ID: ${tempUserId.substring(0, 8)}...)`);
+      }
     }
-  } else {
-    console.log('✅ orders テーブルへの接続に成功しました');
+  } catch (authSetupErr: any) {
+    console.warn(`⚠️ 認証セッション準備例外: ${authSetupErr.message}`);
   }
 
-  console.log('\n=== [3. 全8個のRPC権限・実行状態の確認] ===');
+  console.log('\n=== [4. 全8個のRPC権限・実行状態の確認 (anon vs authenticated vs service_role)] ===');
   const rpcResults: RpcVerificationResult[] = [];
-
-  const publishableKey =
-    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    env.SUPABASE_ANON_KEY ||
-    (env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.startsWith('sb_publishable_') ? env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY : undefined);
-
-  if (!publishableKey) {
-    console.warn('⚠️ 注意: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY が未設定です。anon検証はダミーキーで行われます (Gatewayレベルで遮断されます)。');
-    console.warn('  -> 完全な PostgreSQL ACL 監査を行うには、.env.staging.local に NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY を設定するか、');
-    console.warn('     supabase/queries/audit_phase0_acl.sql を SQL Editor で実行してください。\n');
-  } else {
-    console.log(`- Publishable Key: 有効キー設定済み (${publishableKey.startsWith('sb_publishable_') ? '新形式 sb_publishable_*' : '形式確認完了'})`);
-  }
-
-  // anon クライアント（有効な publishableKey があればそれを使用、なければダミーキー）
-  const anonClient = createClient(supabaseUrl, publishableKey || 'dummy_anon_key_for_acl_test');
+  const anonClient = createClient(supabaseUrl, publishableKey);
 
   for (const rpc of RPC_NAMES) {
     const params = RPC_TEST_PARAMS[rpc] || {};
@@ -182,8 +246,6 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
       if (error) {
         serviceStatus = error.code || 'ERR';
         serviceMsg = error.message;
-        // P0001 (PostgreSQL RAISE EXCEPTION) や 23xxx (制約エラー) は、関数が存在し実行された証拠
-        // 42501 (permission denied) や PGRST202 (not found) 以外でSQLエラーが出た場合はACL許可・実行成功とみなす
         if (
           error.code !== '42501' &&
           error.code !== 'PGRST202' &&
@@ -209,23 +271,15 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
     // 2. anon での呼び出し (拒絶されることを確認)
     let anonStatus: number | string = 'UNKNOWN';
     let anonMsg = '';
-    let isAclDenied = false;
-    let isGatewayDenied = false;
+    let isAnonAclDenied = false;
 
     try {
       const { data, error } = await anonClient.rpc(rpc, params as any);
       if (error) {
         anonStatus = error.code || 'ERR';
         anonMsg = error.message;
-        if (error.message.includes('Invalid API key')) {
-          isGatewayDenied = true;
-        } else if (
-          error.code === '42501' ||
-          error.message.includes('permission denied') ||
-          error.code === 'PGRST301' ||
-          error.message.includes('Forbidden')
-        ) {
-          isAclDenied = true;
+        if (error.code === '42501' || error.message.includes('permission denied') || error.code === 'PGRST301') {
+          isAnonAclDenied = true;
         }
       } else {
         anonStatus = 200;
@@ -236,16 +290,32 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
       anonMsg = e.message;
     }
 
-    // 権限判定の評価
-    const isAnonBlocked = anonStatus !== 200;
-    let anonVerdict = '❌ 脆弱性: 実行許可';
-    if (isAclDenied) {
-      anonVerdict = '✅ PostgreSQL ACL拒絶 (REVOKE成功: permission denied)';
-    } else if (isGatewayDenied) {
-      anonVerdict = '⚠️ Gateway無効キー拒絶 (APIキー未設定/無効)';
-    } else if (isAnonBlocked) {
-      anonVerdict = `✅ アクセス拒絶確認 (${anonStatus})`;
+    // 3. authenticated での呼び出し (拒絶されることを確認)
+    let authStatus: number | string = 'SKIPPED';
+    let authMsg = 'User session not available';
+    let isAuthAclDenied = false;
+
+    if (authClient) {
+      try {
+        const { data, error } = await authClient.rpc(rpc, params as any);
+        if (error) {
+          authStatus = error.code || 'ERR';
+          authMsg = error.message;
+          if (error.code === '42501' || error.message.includes('permission denied') || error.code === 'PGRST301') {
+            isAuthAclDenied = true;
+          }
+        } else {
+          authStatus = 200;
+          authMsg = 'UNEXPECTED_SUCCESS';
+        }
+      } catch (e: any) {
+        authStatus = 'EXCEPTION';
+        authMsg = e.message;
+      }
     }
+
+    const isAnonSecured = anonStatus !== 200;
+    const isAuthSecured = !authClient || authStatus !== 200;
 
     rpcResults.push({
       rpcName: rpc,
@@ -253,22 +323,105 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
       serviceRoleMessage: serviceMsg,
       anonStatus,
       anonMessage: anonMsg,
-      isSecured: isServiceRoleAllowed && isAnonBlocked,
+      authenticatedStatus: authStatus,
+      authenticatedMessage: authMsg,
+      isSecured: isServiceRoleAllowed && isAnonSecured && isAuthSecured,
     });
 
     console.log(`- RPC: ${rpc}`);
-    console.log(`  service_role: [${serviceStatus}] ${serviceMsg} -> ${isServiceRoleAllowed ? '✅ 実行可能 (ACL許可確認)' : '❌ 実行不可'}`);
-    console.log(`  anon:         [${anonStatus}] ${anonMsg} -> ${anonVerdict}`);
+    console.log(`  service_role:  [${serviceStatus}] ${serviceMsg} -> ${isServiceRoleAllowed ? '✅ 実行可能' : '❌ 実行不可'}`);
+    console.log(
+      `  anon:          [${anonStatus}] ${anonMsg} -> ${isAnonAclDenied ? '✅ PostgreSQL ACL拒絶 (42501)' : isAnonSecured ? '✅ 拒絶' : '❌ 許可'}`
+    );
+    if (authClient) {
+      console.log(
+        `  authenticated: [${authStatus}] ${authMsg} -> ${isAuthAclDenied ? '✅ PostgreSQL ACL拒絶 (42501)' : isAuthSecured ? '✅ 拒絶' : '❌ 許可'}`
+      );
+    }
   }
 
-  // 副作用の完全クリーンアップ (検証用ストアキーのレコードのみを安全に削除)
-  try {
-    await client.from('orders').delete().eq('store_id', PROBE_STORE_KEY);
-    await client.from('order_number_sequences').delete().eq('store_id', PROBE_STORE_KEY);
-    console.log('\n✅ 副作用防止: 検証用ダミーデータ (__probe_acl_test__) はすべてクリーンアップされました');
-  } catch (cleanErr: any) {
-    console.warn(`⚠️ クリーンアップ警告: ${cleanErr.message}`);
+  console.log('\n=== [5. 副作用のクリーンアップおよび事後スナップショット検証] ===');
+
+  // 1. 一時テストユーザーの削除
+  if (tempUserId) {
+    try {
+      await client.auth.admin.deleteUser(tempUserId);
+      console.log('✅ 一時検証用 authenticated テストユーザーを削除完了');
+    } catch (delErr: any) {
+      throw new Error(`CRITICAL_CLEANUP_FAILURE: Failed to delete temporary test user: ${delErr.message}`);
+    }
   }
+
+  // 2. 検証ストアキー (__probe_acl_test__) の削除
+  const { error: delOrderErr } = await client.from('orders').delete().eq('store_id', PROBE_STORE_KEY);
+  if (delOrderErr) {
+    throw new Error(`CRITICAL_CLEANUP_FAILURE: Failed to delete probe orders: ${delOrderErr.message}`);
+  }
+
+  const { error: delSeqErr } = await client.from('order_number_sequences').delete().eq('store_id', PROBE_STORE_KEY);
+  if (delSeqErr) {
+    throw new Error(`CRITICAL_CLEANUP_FAILURE: Failed to delete probe sequences: ${delSeqErr.message}`);
+  }
+
+  // 3. 残存レコードの厳密チェック (クリーンアップ成否の完全検証)
+  const { count: remainingOrders, error: remOrderErr } = await client
+    .from('orders')
+    .select('*', { count: 'exact', head: true })
+    .eq('store_id', PROBE_STORE_KEY);
+  if (remOrderErr || (remainingOrders !== null && remainingOrders > 0)) {
+    throw new Error(`CRITICAL_CLEANUP_FAILURE: Probe order records still remain (${remainingOrders} records).`);
+  }
+
+  const { count: remainingSeq, error: remSeqErr } = await client
+    .from('order_number_sequences')
+    .select('*', { count: 'exact', head: true })
+    .eq('store_id', PROBE_STORE_KEY);
+  if (remSeqErr || (remainingSeq !== null && remainingSeq > 0)) {
+    throw new Error(`CRITICAL_CLEANUP_FAILURE: Probe sequence records still remain (${remainingSeq} records).`);
+  }
+
+  // 4. 事後スナップショット測定と差分比較
+  const { count: postOrderCount, error: postCountErr } = await client
+    .from('orders')
+    .select('*', { count: 'exact', head: true });
+  if (postCountErr) throw new Error(`Post-snapshot error (orders count): ${postCountErr.message}`);
+
+  const { data: postStoreState, error: postStateErr } = await client
+    .from('orders')
+    .select('id, items, customer_avatar, status, customer_name')
+    .eq('id', 'STORE_STATE_001')
+    .single();
+  if (postStateErr) throw new Error(`Post-snapshot error (STORE_STATE_001): ${postStateErr.message}`);
+
+  const { data: postSeqData, error: postSeqErr } = await client
+    .from('order_number_sequences')
+    .select('store_id, order_date, last_number')
+    .eq('store_id', 'kenocha_main');
+  if (postSeqErr) throw new Error(`Post-snapshot error (order_number_sequences): ${postSeqErr.message}`);
+
+  // 比較検証
+  const isOrderCountMatch = preOrderCount === postOrderCount;
+  const isStoreStateMatch = JSON.stringify(preStoreState) === JSON.stringify(postStoreState);
+  const isSeqMatch = JSON.stringify(preSeqData) === JSON.stringify(postSeqData);
+
+  if (!isOrderCountMatch || !isStoreStateMatch || !isSeqMatch) {
+    throw new Error(
+      `CRITICAL_SIDE_EFFECT_DETECTED: Database state modified during verification! (orderCountMatch=${isOrderCountMatch}, storeStateMatch=${isStoreStateMatch}, seqMatch=${isSeqMatch})`
+    );
+  }
+
+  console.log('✅ 実測確認: 検証前後の通常データ比較結果:');
+  console.log(`  - STORE_STATE_001: 完全一致 (変更なし)`);
+  console.log(`  - orders 全件数: 完全一致 (${preOrderCount} 件 -> ${postOrderCount} 件)`);
+  console.log(`  - kenocha_main 採番シーケンス: 完全一致 (変更なし)`);
+  console.log(`  - __probe_acl_test__ 残存レコード: 0 件 (完全クリーンアップ確認済み)`);
+
+  return {
+    supabaseUrl,
+    isNewFormat,
+    rpcResults,
+  };
+}
 
   return {
     supabaseUrl,
