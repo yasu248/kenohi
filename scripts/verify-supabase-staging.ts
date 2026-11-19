@@ -153,11 +153,17 @@ export async function verifyStagingSupabase(env: Record<string, string | undefin
   console.log('\n=== [3. 全8個のRPC権限・実行状態の確認] ===');
   const rpcResults: RpcVerificationResult[] = [];
 
-  const publishableKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY;
+  const publishableKey =
+    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    env.SUPABASE_ANON_KEY ||
+    (env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.startsWith('sb_publishable_') ? env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY : undefined);
+
   if (!publishableKey) {
     console.warn('⚠️ 注意: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY が未設定です。anon検証はダミーキーで行われます (Gatewayレベルで遮断されます)。');
     console.warn('  -> 完全な PostgreSQL ACL 監査を行うには、.env.staging.local に NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY を設定するか、');
     console.warn('     supabase/queries/audit_phase0_acl.sql を SQL Editor で実行してください。\n');
+  } else {
+    console.log(`- Publishable Key: 有効キー設定済み (${publishableKey.startsWith('sb_publishable_') ? '新形式 sb_publishable_*' : '形式確認完了'})`);
   }
 
   // anon クライアント（有効な publishableKey があればそれを使用、なければダミーキー）
