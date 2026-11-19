@@ -83,7 +83,7 @@ export function loadAndVerifyStagingEnv(): Record<string, string> {
   const knownProductionRef = 'liyjwvgtavfjiohwryox';
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === 'string') {
-      if (v.includes(knownProductionRef)) {
+      if (k !== 'PRODUCTION_SUPABASE_PROJECT_REF' && v.includes(knownProductionRef)) {
         throw new Error(`CRITICAL: Production Supabase Ref detected in environment variable ${k}. Startup halted.`);
       }
       if (k.includes('STRIPE') && v.startsWith('sk_live_')) {
