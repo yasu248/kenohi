@@ -111,6 +111,7 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
       cancellationStatus: 'cancelled',
       productionStatus: 'pending',
       fulfillmentStatus: 'not_handed_over',
+      stripeSessionId: 'cs_test_delayed_1',
     });
 
     const result = await verifyAndConfirmStripePayment({
@@ -341,6 +342,7 @@ describe('[Phase 0-G] 決済成功・注文取消競合の監査・返金案件�
       status: 'cancelled',
       paymentStatus: null,
       cancellationStatus: null,
+      stripeSessionId: 'cs_test_legacy_1',
     });
 
     const result = await verifyAndConfirmStripePayment({

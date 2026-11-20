@@ -719,11 +719,14 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
 
     const payload = data as {
       found?: boolean;
-      transitioned_from_unpaid?: boolean;
+      ok?: boolean;
+      code?: string;
+      message?: string;
+      transitioned?: boolean;
       order?: OrderDbRow;
     } | null;
 
-    if (!payload || !payload.found || !payload.order) {
+    if (!payload || !payload.found || payload.ok === false || !payload.order) {
       return { updatedOrder: null, transitionedFromUnpaid: false };
     }
 

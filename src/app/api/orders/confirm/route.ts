@@ -18,12 +18,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Stripeからセッション情報を取得して支払い状態・金額・通貨・注文IDを検証
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['payment_intent'],
+    });
 
     const confirmation = await verifyAndConfirmStripePayment({
       session: {
         id: session.id,
         payment_status: session.payment_status,
+        status: session.status,
+        mode: session.mode,
+        livemode: session.livemode,
         amount_total: session.amount_total,
         currency: session.currency,
         metadata: session.metadata,

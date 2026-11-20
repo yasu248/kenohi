@@ -524,6 +524,7 @@ describe('Phase 0 Checkout Server-Side Guard & Item/Price Validation', () => {
       productionStatus: 'unstarted',
       fulfillmentStatus: 'not_handed_over',
       cancellationStatus: 'active',
+      stripeSessionId: 'cs_live_before_close_001',
     };
 
     const events = new Map<string, StripeWebhookEventRecord>();

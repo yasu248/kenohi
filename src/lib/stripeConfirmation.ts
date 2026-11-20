@@ -260,7 +260,49 @@ export async function verifyAndConfirmStripePayment(params: {
     };
   }
 
-  // 2. 支払い完了ステータスの検証 (未決済・失敗時はキッチンに表示しない)
+  // 2. 決済モードの検証 (買い切り payment モード必須)
+  if (session.mode && session.mode !== 'payment') {
+    const message = `不正なStripeセッションモードです (mode: ${session.mode})`;
+    const recorded = await recordPermanentValidationFailure({
+      repo,
+      webhookEventId,
+      sessionId: session.id,
+      orderId,
+      code: 'INVALID_SESSION_MODE',
+      message,
+    });
+    return {
+      ok: false,
+      code: 'INVALID_SESSION_MODE',
+      message,
+      status: 400,
+      retryable: false,
+      permanentFailureRecorded: recorded,
+    };
+  }
+
+  // 3. セッション完了状態の検証 (complete 必須)
+  if (session.status && session.status !== 'complete') {
+    const message = `Stripeセッションが完了していません (status: ${session.status})`;
+    const recorded = await recordPermanentValidationFailure({
+      repo,
+      webhookEventId,
+      sessionId: session.id,
+      orderId,
+      code: 'SESSION_NOT_COMPLETED',
+      message,
+    });
+    return {
+      ok: false,
+      code: 'SESSION_NOT_COMPLETED',
+      message,
+      status: 400,
+      retryable: false,
+      permanentFailureRecorded: recorded,
+    };
+  }
+
+  // 4. 支払い完了ステータスの検証 (未決済・失敗時はキッチンに表示しない)
   if (session.payment_status !== 'paid') {
     const message = `決済が完了していません (payment_status: ${session.payment_status})`;
     const recorded = await recordPermanentValidationFailure({
@@ -281,7 +323,57 @@ export async function verifyAndConfirmStripePayment(params: {
     };
   }
 
-  // 3. 通貨の検証 (日本円 JPY 必須)
+  // 5. PaymentIntent ステータスの検証 (succeeded 必須)
+  if (
+    session.payment_intent &&
+    typeof session.payment_intent === 'object' &&
+    session.payment_intent.status &&
+    session.payment_intent.status !== 'succeeded'
+  ) {
+    const message = `PaymentIntentが成功していません (status: ${session.payment_intent.status})`;
+    const recorded = await recordPermanentValidationFailure({
+      repo,
+      webhookEventId,
+      sessionId: session.id,
+      orderId,
+      code: 'PAYMENT_INTENT_NOT_SUCCEEDED',
+      message,
+    });
+    return {
+      ok: false,
+      code: 'PAYMENT_INTENT_NOT_SUCCEEDED',
+      message,
+      status: 400,
+      retryable: false,
+      permanentFailureRecorded: recorded,
+    };
+  }
+
+  // 6. 環境モード (livemode) の整合性検証
+  const isProdEnv = process.env.APP_ENV === 'production';
+  if (session.livemode !== undefined && session.livemode !== null) {
+    if (!isProdEnv && session.livemode === true) {
+      const message = '非本番環境で本番用 (livemode=true) のStripeセッションは受け付けられません';
+      const recorded = await recordPermanentValidationFailure({
+        repo,
+        webhookEventId,
+        sessionId: session.id,
+        orderId,
+        code: 'ENVIRONMENT_MISMATCH',
+        message,
+      });
+      return {
+        ok: false,
+        code: 'ENVIRONMENT_MISMATCH',
+        message,
+        status: 400,
+        retryable: false,
+        permanentFailureRecorded: recorded,
+      };
+    }
+  }
+
+  // 7. 通貨の検証 (日本円 JPY 必須)
   if (!session.currency || session.currency.toLowerCase() !== 'jpy') {
     const message = `不正な通貨が指定されています (currency: ${session.currency ?? 'null'})`;
     const recorded = await recordPermanentValidationFailure({
@@ -376,6 +468,47 @@ export async function verifyAndConfirmStripePayment(params: {
         message,
         status: 404,
         retryable: true,
+      };
+    }
+
+    // 8. 注文レコードに記録された Stripe Session ID との厳格な一致検証 (Cross-Session スプーフィング遮断)
+    if (!order.stripeSessionId || order.stripeSessionId.trim() === '') {
+      const message = `注文レコードにStripeセッションIDが設定されていません (orderId: ${orderId})`;
+      const recorded = await recordPermanentValidationFailure({
+        repo,
+        webhookEventId,
+        sessionId: session.id,
+        orderId,
+        code: 'SESSION_ID_NOT_CONFIGURED',
+        message,
+      });
+      return {
+        ok: false,
+        code: 'SESSION_ID_NOT_CONFIGURED',
+        message,
+        status: 400,
+        retryable: false,
+        permanentFailureRecorded: recorded,
+      };
+    }
+
+    if (order.stripeSessionId !== session.id) {
+      const message = `提供されたStripeセッションIDが注文レコードと一致しません (expected: ${order.stripeSessionId}, received: ${session.id})`;
+      const recorded = await recordPermanentValidationFailure({
+        repo,
+        webhookEventId,
+        sessionId: session.id,
+        orderId,
+        code: 'SESSION_ID_MISMATCH',
+        message,
+      });
+      return {
+        ok: false,
+        code: 'SESSION_ID_MISMATCH',
+        message,
+        status: 400,
+        retryable: false,
+        permanentFailureRecorded: recorded,
       };
     }
 

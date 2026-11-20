@@ -168,6 +168,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
       status: 'unpaid',
       paymentStatus: 'unpaid',
       productionStatus: 'pending',
+      stripeSessionId: 'cs_test_123',
     });
     repo.orders.set('ord_cooking_2', {
       id: 'ord_cooking_2',
@@ -176,6 +177,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
       status: 'preparing',
       paymentStatus: 'paid',
       productionStatus: 'preparing',
+      stripeSessionId: 'cs_test_delayed',
     });
   });
 
@@ -224,6 +226,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
   });
 
   it('3. Webhook重複受信・完了後のHTTP応答失敗からの再送: 注文更新完了後に応答が失敗しても、再送時に二重処理せず idempotentReplay=true を返すこと', async () => {
+    repo.orders.get('ord_unpaid_1')!.stripeSessionId = 'cs_test_webhook_1';
     const session: StripeCheckoutSessionLike = {
       id: 'cs_test_webhook_1',
       payment_status: 'paid',
@@ -263,6 +266,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
   });
 
   it('4. Webhook処理途中のDB障害と再試行復旧: イベント受信後・注文更新前にDB障害が起きてもロックが解放され、次回再送で正常に注文更新できること', async () => {
+    repo.orders.get('ord_unpaid_1')!.stripeSessionId = 'cs_test_retry_recovery';
     const session: StripeCheckoutSessionLike = {
       id: 'cs_test_retry_recovery',
       payment_status: 'paid',
@@ -342,6 +346,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
   });
 
   it('6. Stripe決済確認の再実行 (confirm API と Webhook の競合・再実行): 二重確定が起きず冪等に完了すること', async () => {
+    repo.orders.get('ord_unpaid_1')!.stripeSessionId = 'cs_test_confirm_and_webhook';
     const session: StripeCheckoutSessionLike = {
       id: 'cs_test_confirm_and_webhook',
       payment_status: 'paid',
@@ -395,6 +400,7 @@ describe('[Phase 0-D / 監査修正 B] Stripe 決済確認・Webhook障害復旧
     assert.equal(repo.events.get('evt_perm_unpaid')?.status, 'failed_permanent');
 
     // 金額不一致 (注文1050円に対しセッション500円)
+    repo.orders.get('ord_unpaid_1')!.stripeSessionId = 'cs_test_mismatch';
     const mismatchSession: StripeCheckoutSessionLike = {
       id: 'cs_test_mismatch',
       payment_status: 'paid',

@@ -37,17 +37,51 @@ export async function POST(request: NextRequest) {
 
   // Handle the event
   if (event.type === 'checkout.session.completed') {
-    const session = event.data.object as Stripe.Checkout.Session;
+    const rawSession = event.data.object as Stripe.Checkout.Session;
+
+    // 【安全強化 1】Stripe サーバー実機から最新のセッション状態を取得して二重照合 (Zero-Trust)
+    let verifiedSession: Stripe.Checkout.Session;
+    try {
+      verifiedSession = await stripe.checkout.sessions.retrieve(rawSession.id, {
+        expand: ['payment_intent'],
+      });
+    } catch (retrieveErr) {
+      console.error(
+        `[Webhook] Stripe API retrieval failed for session ${rawSession.id}:`,
+        retrieveErr
+      );
+      // Stripe API の一時障害時は 500 を返し、Stripe の指数バックオフ再送に委ねる
+      return Response.json(
+        { error: 'Failed to verify session status with Stripe API', retryable: true },
+        { status: 500 }
+      );
+    }
+
+    // 【安全強化 2】Stripe 側で実際に payment_status === 'paid' でない限り、絶対に注文を確定しない
+    if (verifiedSession.payment_status !== 'paid') {
+      console.warn(
+        `[WebhookGuard] Session ${rawSession.id} is NOT marked as paid on Stripe servers (actual: ${verifiedSession.payment_status}). Order confirmation blocked.`
+      );
+      // 未払いのまま届いたイベント（または偽装イベント）は注文を確定せず、かつ正当な非同期決済の再送を阻害しないよう 200 で受領完了
+      return Response.json({
+        received: true,
+        status: 'payment_not_paid_on_stripe',
+        payment_status: verifiedSession.payment_status,
+      });
+    }
 
     try {
       const confirmation = await verifyAndConfirmStripePayment({
         session: {
-          id: session.id,
-          payment_status: session.payment_status,
-          amount_total: session.amount_total,
-          currency: session.currency,
-          metadata: session.metadata,
-          payment_intent: session.payment_intent,
+          id: verifiedSession.id,
+          payment_status: verifiedSession.payment_status,
+          status: verifiedSession.status,
+          mode: verifiedSession.mode,
+          livemode: verifiedSession.livemode,
+          amount_total: verifiedSession.amount_total,
+          currency: verifiedSession.currency,
+          metadata: verifiedSession.metadata,
+          payment_intent: verifiedSession.payment_intent,
         },
         repo: supabasePaymentRepository,
         webhookEventId: event.id,
@@ -56,7 +90,7 @@ export async function POST(request: NextRequest) {
       if (!confirmation.ok) {
         if (confirmation.code === 'CANCELLED_PAYMENT_DISCREPANCY') {
           console.warn(
-            `[Webhook][PaymentDiscrepancy] Session ${session.id} (event=${event.id}) order ${confirmation.orderId} was cancelled but paid. Discrepancy recorded to refund queue.`
+            `[Webhook][PaymentDiscrepancy] Session ${verifiedSession.id} (event=${event.id}) order ${confirmation.orderId} was cancelled but paid. Discrepancy recorded to refund queue.`
           );
           return Response.json({
             received: true,
@@ -67,7 +101,7 @@ export async function POST(request: NextRequest) {
 
         if (confirmation.retryable) {
           console.warn(
-            `[Webhook][Retryable] Session ${session.id} (event=${event.id}) not yet completed: ${confirmation.message}`
+            `[Webhook][Retryable] Session ${verifiedSession.id} (event=${event.id}) not yet completed: ${confirmation.message}`
           );
           return Response.json(
             {
@@ -80,7 +114,7 @@ export async function POST(request: NextRequest) {
         }
 
         console.error(
-          `[Webhook][PermanentValidationError] Session ${session.id} (event=${event.id}) rejected permanently: [${confirmation.code}] ${confirmation.message}`
+          `[Webhook][PermanentValidationError] Session ${verifiedSession.id} (event=${event.id}) rejected permanently: [${confirmation.code}] ${confirmation.message}`
         );
         return Response.json(
           {
