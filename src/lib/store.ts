@@ -723,6 +723,7 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
       code?: string;
       message?: string;
       transitioned?: boolean;
+      transitioned_from_unpaid?: boolean;
       order?: OrderDbRow;
     } | null;
 
@@ -746,7 +747,7 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
         requiresManualAttention: row.requires_manual_attention,
         stripeSessionId: row.stripe_session_id,
       },
-      transitionedFromUnpaid: Boolean(payload.transitioned_from_unpaid),
+      transitionedFromUnpaid: Boolean(payload.transitioned ?? payload.transitioned_from_unpaid),
     };
   },
 

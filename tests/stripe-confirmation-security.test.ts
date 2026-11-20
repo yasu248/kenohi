@@ -127,9 +127,9 @@ class SecurityMockPaymentRepo implements IPaymentConfirmationRepository {
   async recordCancelledPaymentDiscrepancy(params: {
     orderId: string;
     stripeSessionId: string;
-    paymentIntentId?: string | null;
+    paymentIntentId?: string;
     amount: number;
-    currency: string;
+    currency?: string;
     webhookEventId?: string;
     reason?: string;
   }): Promise<{ ok: boolean; refundRequestId?: string }> {
