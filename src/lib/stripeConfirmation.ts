@@ -22,13 +22,16 @@ export const DEFAULT_WEBHOOK_LOCK_TIMEOUT_MS = 30_000;
 export interface StripeCheckoutSessionLike {
   id: string;
   payment_status: string;
+  status?: string | null;
+  mode?: string | null;
+  livemode?: boolean | null;
   amount_total: number | null;
   currency: string | null;
   metadata?: {
     orderId?: string;
     orderNumber?: string;
   } | null;
-  payment_intent?: string | { id: string } | null;
+  payment_intent?: string | { id: string; status?: string } | null;
 }
 
 export interface OrderRecordForPayment {
@@ -52,6 +55,12 @@ export type PaymentRejectionCode =
   | 'ORDER_NOT_FOUND'
   | 'CURRENCY_MISMATCH'
   | 'AMOUNT_MISMATCH'
+  | 'SESSION_ID_MISMATCH'
+  | 'SESSION_ID_NOT_CONFIGURED'
+  | 'INVALID_SESSION_MODE'
+  | 'SESSION_NOT_COMPLETED'
+  | 'PAYMENT_INTENT_NOT_SUCCEEDED'
+  | 'ENVIRONMENT_MISMATCH'
   | 'ORDER_CANCELLED'
   | 'CANCELLED_PAYMENT_DISCREPANCY'
   | 'WEBHOOK_IN_PROGRESS';
@@ -319,6 +328,12 @@ export async function verifyAndConfirmStripePayment(params: {
         PAYMENT_NOT_PAID: 400,
         CURRENCY_MISMATCH: 400,
         AMOUNT_MISMATCH: 400,
+        SESSION_ID_MISMATCH: 400,
+        SESSION_ID_NOT_CONFIGURED: 400,
+        INVALID_SESSION_MODE: 400,
+        SESSION_NOT_COMPLETED: 400,
+        PAYMENT_INTENT_NOT_SUCCEEDED: 400,
+        ENVIRONMENT_MISMATCH: 400,
         ORDER_NOT_FOUND: 404,
         ORDER_CANCELLED: 409,
         CANCELLED_PAYMENT_DISCREPANCY: 409,
