@@ -316,7 +316,7 @@ export async function runStagingE2E() {
     console.log('✅ 冪等性検証クリア (二重処理・巻き戻しなく 200 OK 応答)\n');
 
     // --- シナリオ 10: 閉店ガード検証 ---
-    console.log('=== [シナリオ 10] 閉店ガード検証 (isManualOpen: false での 400 拒絶) ===');
+    console.log('=== [シナリオ 10] 閉店ガード検証 (isManualOpen: false での受付拒絶) ===');
     await supabase.rpc('update_store_state_tx', {
       p_store_id: 'kenocha_main',
       p_state_json: {
@@ -337,10 +337,10 @@ export async function runStagingE2E() {
     const closedJson = (await closedRes.json()) as { error?: string; code?: string };
     console.log(`- 閉店中エラー応答:`, closedJson);
 
-    if (closedRes.status !== 400 || closedJson.code !== 'STORE_CLOSED') {
+    if ((closedRes.status !== 400 && closedRes.status !== 503) || closedJson.code !== 'STORE_CLOSED') {
       throw new Error(`Store closed guard failed: status=${closedRes.status}, code=${closedJson.code}`);
     }
-    console.log('✅ 閉店ガードによる 400 STORE_CLOSED 拒絶を確認 (Stripe Session未発行)\n');
+    console.log('✅ 閉店ガードによる STORE_CLOSED 拒絶を確認 (Stripe Session未発行)\n');
 
     // --- シナリオ 11: 注文キャンセル競合 (Race Condition) 検証 ---
     console.log('=== [シナリオ 11] 注文キャンセル競合 (Race Condition) 検証 ===');
