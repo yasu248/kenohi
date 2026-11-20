@@ -1750,7 +1750,7 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.equal(resBadCurrency.code, 'CURRENCY_MISMATCH');
     });
 
-    it('8.14 payment_status IS NULL の暗黙 paid 補完禁止と同一WebhookイベントIDの別注文・別Session再利用拒否 (WEBHOOK_EVENT_CONFLICT)', () => {
+    it('8.14 payment_status IS NULL の暗黙 paid 補完禁止と同一WebhookイベントIDの別注文・別Session再利用拒否 (ON CONFLICT 同時競合含む)', async () => {
       // 1. status='pending' だが payment_status IS NULL の不整合レコードが暗黙に paid へ補完されず INVALID_ORDER_STATE で拒否されること
       runPsql(`
         INSERT INTO public.orders (
@@ -1792,6 +1792,62 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       `);
       assert.equal(resReuseDiscrepancy.ok, false);
       assert.equal(resReuseDiscrepancy.code, 'WEBHOOK_EVENT_CONFLICT');
+
+      // 3. まだ未登録の新規 Webhook イベントID ('evt_0002_on_conflict_race') を2つの異なる未決済注文 A・B で同時に呼び出した場合、
+      //    ON CONFLICT 競合時にも片方のみが成功し、もう片方は WEBHOOK_EVENT_CONFLICT で拒否され注文も unpaid のまま残ること
+      runPsql(`
+        DELETE FROM public.stripe_webhook_events WHERE event_id = 'evt_0002_on_conflict_race';
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES
+          ('ord_0002_race_evt_A', '競合客A', '8010', 400, 'unpaid', 'unpaid', 'pending', 'not_handed_over', 'active', 'cs_race_evt_A'),
+          ('ord_0002_race_evt_B', '競合客B', '8011', 400, 'unpaid', 'unpaid', 'pending', 'not_handed_over', 'active', 'cs_race_evt_B')
+        ON CONFLICT (id) DO UPDATE SET
+          status = 'unpaid', payment_status = 'unpaid', cancellation_status = 'active', stripe_session_id = EXCLUDED.stripe_session_id;
+      `);
+
+      const [raceA, raceB] = await Promise.all([
+        new Promise<any>((resolve, reject) => {
+          try {
+            resolve(
+              queryJson(`
+                SET ROLE service_role;
+                SELECT public.confirm_stripe_order_payment_tx('ord_0002_race_evt_A', 'cs_race_evt_A', 'evt_0002_on_conflict_race');
+              `)
+            );
+          } catch (e) {
+            reject(e);
+          }
+        }),
+        new Promise<any>((resolve, reject) => {
+          try {
+            resolve(
+              queryJson(`
+                SET ROLE service_role;
+                SELECT public.confirm_stripe_order_payment_tx('ord_0002_race_evt_B', 'cs_race_evt_B', 'evt_0002_on_conflict_race');
+              `)
+            );
+          } catch (e) {
+            reject(e);
+          }
+        }),
+      ]);
+
+      const okResults = [raceA, raceB].filter((r) => r.ok === true);
+      const conflictResults = [raceA, raceB].filter((r) => r.ok === false && r.code === 'WEBHOOK_EVENT_CONFLICT');
+      assert.equal(okResults.length, 1, '同一イベントIDの別注文並列呼び出しでは厳密に1件のみが確定すること');
+      assert.equal(conflictResults.length, 1, 'もう1件は ON CONFLICT 競合検証により WEBHOOK_EVENT_CONFLICT で拒否されること');
+
+      const paidCount = querySingle(`
+        SELECT COUNT(*) FROM public.orders
+        WHERE id IN ('ord_0002_race_evt_A', 'ord_0002_race_evt_B') AND payment_status = 'paid';
+      `);
+      const unpaidCount = querySingle(`
+        SELECT COUNT(*) FROM public.orders
+        WHERE id IN ('ord_0002_race_evt_A', 'ord_0002_race_evt_B') AND payment_status = 'unpaid' AND status = 'unpaid';
+      `);
+      assert.equal(paidCount, '1', '確定した注文は1件のみであること');
+      assert.equal(unpaidCount, '1', '拒否された注文は unpaid のまま一切変更されないこと');
     });
   });
 });

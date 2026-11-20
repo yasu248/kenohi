@@ -5,34 +5,30 @@
 -- 監査対応要件:
 -- 1. 0001 の安全機構（FOR UPDATE 行ロック、同一トランザクションでの stripe_webhook_events 確定、
 --    transitioned_from_unpaid 戻り値キー、SECURITY DEFINER / search_path / ACL 制限）を完全維持する。
--- 2. システム管理レコード (STORE_STATE_001) および過去未判定注文 (legacy_undetermined:
+-- 2. デッドロック防止のためのロック取得順序を全 RPC で厳格に統一する:
+--      Lock Level 1: pg_advisory_xact_lock(hashtext('store_state:' || store_id)) + orders(STORE_STATE_001)
+--      Lock Level 2: pg_advisory_xact_lock(hashtext('order_seq:' || store_id || ':' || order_date)) + order_number_sequences
+--      Lock Level 3: public.orders (id = p_order_id FOR UPDATE)
+--      Lock Level 4: public.order_refund_requests (order_id = p_order_id FOR UPDATE)
+--      Lock Level 5: public.stripe_webhook_events (event_id = p_webhook_event_id FOR UPDATE / ON CONFLICT)
+-- 3. システム管理レコード (STORE_STATE_001) および過去未判定注文 (legacy_undetermined:
 --    status = 'cancelled' かつ 4軸カラムすべて NULL) を保護し、誤更新・誤判定を防止する。
--- 3. 注文レコードの stripe_session_id が未設定 (NULL / 空文字) または引数 p_stripe_session_id と
---    不一致の場合は、confirm_stripe_order_payment_tx / record_cancelled_payment_discrepancy_tx の
---    双方で DB レベルで拒否する (SESSION_ID_NOT_CONFIGURED / SESSION_ID_MISMATCH)。
+-- 4. 注文レコードの stripe_session_id が未設定 (NULL / 空文字) または引数 p_stripe_session_id と
+--    不一致の場合は、IS DISTINCT FROM を用いて NULL を含むあらゆる不一致を検出し、
+--    confirm_stripe_order_payment_tx / record_cancelled_payment_discrepancy_tx の双方で
+--    DB レベルで拒否する (SESSION_ID_NOT_CONFIGURED / SESSION_ID_MISMATCH)。
 --    RPC 直接呼び出しによる未設定注文への Session ID 後付け補完は一切許可しない。
--- 4. 同一 Webhook イベント ID (p_webhook_event_id) が異なる注文 ID または異なる Session ID に
---    再利用された場合は WEBHOOK_EVENT_CONFLICT として拒否し、恒久失敗済み (failed_permanent)
---    イベントの succeeded 上書きも WEBHOOK_EVENT_FAILED_PERMANENT として拒否する。
--- 5. キャンセル済み注文 (cancellation_status = 'cancelled') は ORDER_CANCELLED として拒否し、
+-- 5. 同一 Webhook イベント ID (p_webhook_event_id) が異なる注文 ID または異なる Session ID に
+--    再利用された場合は、事前 FOR UPDATE チェックおよび INSERT ... ON CONFLICT DO UPDATE の
+--    WHERE 句 (IS NOT DISTINCT FROM) + RETURNING FOUND 検証の二段構えにより、同時競合時を含め
+--    WEBHOOK_EVENT_CONFLICT として確実に拒否し、注文・返金データを一切更新しない。
+-- 6. キャンセル済み注文 (cancellation_status = 'cancelled') は ORDER_CANCELLED として拒否し、
 --    絶対に調理待ち (pending / active) へ復活させない。
--- 6. 受渡完了注文 (status = 'cancelled' かつ fulfillment_status = 'handed_over' かつ
+-- 7. 受渡完了注文 (status = 'cancelled' かつ fulfillment_status = 'handed_over' かつ
 --    cancellation_status = 'active') をキャンセル済みと誤判定せず、冪等再送として安全に処理する。
--- 7. status <> 'unpaid' を一律に UPDATE する設計や payment_status IS NULL の暗黙 paid 補完を廃止し、
---    明示的に許可された状態遷移のみを実行する:
---    - 初期確定: status = 'unpaid' AND payment_status = 'unpaid'
---                AND cancellation_status = 'active'
---                AND COALESCE(fulfillment_status, 'not_handed_over') = 'not_handed_over'
---      -> status = 'pending', payment_status = 'paid', production_status = 'pending',
---         fulfillment_status = 'not_handed_over', cancellation_status = 'active'
---    - 冪等再送: cancellation_status = 'active'
---                AND payment_status IN ('paid', 'partially_refunded', 'refunded')
---                AND ((status IN ('pending', 'preparing', 'completed')
---                      AND COALESCE(fulfillment_status, 'not_handed_over') = 'not_handed_over')
---                     OR (status = 'cancelled' AND fulfillment_status = 'handed_over'))
---      -> 注文レコード・製造状態・受渡状態・返金済みステータスを一切書き換えずそのまま保持する
---    - 上記以外の状態 (payment_status IS NULL や 'failed' 等) は INVALID_ORDER_STATE として拒否。
--- 8. record_cancelled_payment_discrepancy_tx における返金案件の不変性・状態遷移保護:
+-- 8. status <> 'unpaid' を一律に UPDATE する設計や payment_status IS NULL の暗黙 paid 補完を廃止し、
+--    明示的に許可された状態遷移のみを実行する。
+-- 9. record_cancelled_payment_discrepancy_tx における返金案件の不変性・状態遷移保護:
 --    - 注文金額 (total_price) と p_amount、および通貨 ('jpy') の一致を DB レベルでも検証する。
 --    - すでに refund_status = 'succeeded' の返金完了案件は完全不変 (Immutable) とし、
 --      遅延 Webhook や再送によって PaymentIntent ID / Session ID / 金額 / Refund ID /
@@ -61,6 +57,8 @@ DECLARE
   v_order public.orders%ROWTYPE;
   v_webhook_evt public.stripe_webhook_events%ROWTYPE;
   v_transitioned BOOLEAN := FALSE;
+  v_is_initial_confirm BOOLEAN := FALSE;
+  v_is_idempotent_replay BOOLEAN := FALSE;
 BEGIN
   -- 0. システム管理レコード (STORE_STATE_001) または空IDの保護
   IF p_order_id IS NULL OR TRIM(p_order_id) = '' OR p_order_id = 'STORE_STATE_001' THEN
@@ -114,8 +112,8 @@ BEGIN
     );
   END IF;
 
-  -- 3. 記録された stripe_session_id と入力 p_stripe_session_id の厳格な一致検証 (Cross-Session 流用遮断)
-  IF v_order.stripe_session_id <> p_stripe_session_id THEN
+  -- 3. 記録された stripe_session_id と入力 p_stripe_session_id の厳格な一致検証 (IS DISTINCT FROM で NULL 含む不一致を完全遮断)
+  IF v_order.stripe_session_id IS DISTINCT FROM p_stripe_session_id THEN
     RETURN jsonb_build_object(
       'found', TRUE,
       'ok', FALSE,
@@ -124,7 +122,7 @@ BEGIN
     );
   END IF;
 
-  -- 4. Webhook イベントIDの注文・セッション束縛検証 (別注文・別セッションへのイベントID再利用遮断)
+  -- 4. Lock Level 5 (事前確認): Webhook イベントIDの注文・セッション束縛検証
   IF p_webhook_event_id IS NOT NULL AND TRIM(p_webhook_event_id) <> '' THEN
     SELECT *
     INTO v_webhook_evt
@@ -133,7 +131,8 @@ BEGIN
     FOR UPDATE;
 
     IF FOUND THEN
-      IF v_webhook_evt.order_id <> p_order_id OR v_webhook_evt.session_id <> p_stripe_session_id THEN
+      IF v_webhook_evt.order_id IS DISTINCT FROM p_order_id
+         OR v_webhook_evt.session_id IS DISTINCT FROM p_stripe_session_id THEN
         RETURN jsonb_build_object(
           'found', TRUE,
           'ok', FALSE,
@@ -167,25 +166,12 @@ BEGIN
     );
   END IF;
 
-  -- 6. 明示的に許可された決済状態遷移のみを実行（payment_status IS NULL の暗黙補完や想定外状態の更新を禁止）
+  -- 6. 明示的に許可された決済状態遷移の事前判定（payment_status IS NULL の暗黙補完や想定外状態の更新を禁止）
   IF v_order.status = 'unpaid'
      AND v_order.payment_status = 'unpaid'
      AND v_order.cancellation_status = 'active'
      AND COALESCE(v_order.fulfillment_status, 'not_handed_over') = 'not_handed_over' THEN
-    -- [遷移A] 未決済 (unpaid) -> 調理待ち・決済完了 (pending / paid)
-    UPDATE public.orders
-    SET
-      status = 'pending',
-      payment_status = 'paid',
-      production_status = 'pending',
-      fulfillment_status = 'not_handed_over',
-      cancellation_status = 'active',
-      updated_at = NOW()
-    WHERE id = p_order_id
-    RETURNING * INTO v_order;
-
-    v_transitioned := TRUE;
-
+    v_is_initial_confirm := TRUE;
   ELSIF v_order.cancellation_status = 'active'
     AND v_order.payment_status IN ('paid', 'partially_refunded', 'refunded')
     AND (
@@ -193,12 +179,8 @@ BEGIN
        AND COALESCE(v_order.fulfillment_status, 'not_handed_over') = 'not_handed_over')
       OR (v_order.status = 'cancelled' AND v_order.fulfillment_status = 'handed_over')
     ) THEN
-    -- [遷移B] すでに明示的に決済確定済みの進行中 (pending / preparing / completed) または受渡完了 (handed_over) の冪等再送
-    -- 注文レコード（製造状態・受渡状態・返金済みステータス・updated_at）を一切変更せず保全する。
-    v_transitioned := FALSE;
-
+    v_is_idempotent_replay := TRUE;
   ELSE
-    -- [拒否] 想定外の状態 (payment_status IS NULL, 'failed', または不整合な4軸の組み合わせ) は一切更新せず安全に拒否
     RETURN jsonb_build_object(
       'found', TRUE,
       'ok', FALSE,
@@ -213,7 +195,8 @@ BEGIN
     );
   END IF;
 
-  -- 7. Webhook 経由の場合は同一トランザクション内でイベントを succeeded に確定する
+  -- 7. Lock Level 5 (確定): Webhook 経由の場合は注文更新の前にイベントを succeeded に確定し、
+  --    ON CONFLICT 同時競合時にも order_id / session_id の一致 (IS NOT DISTINCT FROM) を強制する
   IF p_webhook_event_id IS NOT NULL AND TRIM(p_webhook_event_id) <> '' THEN
     INSERT INTO public.stripe_webhook_events (
       event_id,
@@ -246,8 +229,39 @@ BEGIN
       error_message = NULL,
       processed_at = COALESCE(public.stripe_webhook_events.processed_at, NOW()),
       updated_at = NOW()
-    WHERE public.stripe_webhook_events.order_id = p_order_id
-      AND public.stripe_webhook_events.session_id = p_stripe_session_id;
+    WHERE public.stripe_webhook_events.order_id IS NOT DISTINCT FROM p_order_id
+      AND public.stripe_webhook_events.session_id IS NOT DISTINCT FROM p_stripe_session_id
+      AND public.stripe_webhook_events.status <> 'failed_permanent'
+    RETURNING * INTO v_webhook_evt;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'found', TRUE,
+        'ok', FALSE,
+        'code', 'WEBHOOK_EVENT_CONFLICT',
+        'message', '同一のWebhookイベントIDが異なる注文ID・セッションIDで使用されているか、恒久エラー状態のため確定できません。'
+      );
+    END IF;
+  END IF;
+
+  -- 8. 注文ステータスの更新実行
+  IF v_is_initial_confirm THEN
+    -- [遷移A] 未決済 (unpaid) -> 調理待ち・決済完了 (pending / paid)
+    UPDATE public.orders
+    SET
+      status = 'pending',
+      payment_status = 'paid',
+      production_status = 'pending',
+      fulfillment_status = 'not_handed_over',
+      cancellation_status = 'active',
+      updated_at = NOW()
+    WHERE id = p_order_id
+    RETURNING * INTO v_order;
+
+    v_transitioned := TRUE;
+  ELSE
+    -- [遷移B] すでに決済確定済みの進行中または受渡完了注文の冪等再送（レコード不変）
+    v_transitioned := FALSE;
   END IF;
 
   -- 0001 互換の 'transitioned_from_unpaid' と 0002 の 'transitioned' の両方を返却
@@ -283,6 +297,7 @@ DECLARE
   v_order public.orders%ROWTYPE;
   v_req public.order_refund_requests%ROWTYPE;
   v_existing_req public.order_refund_requests%ROWTYPE;
+  v_has_existing_req BOOLEAN := FALSE;
   v_webhook_evt public.stripe_webhook_events%ROWTYPE;
   v_clean_pi TEXT := NULLIF(TRIM(COALESCE(p_payment_intent_id, '')), '');
   v_already_recorded BOOLEAN := FALSE;
@@ -332,7 +347,7 @@ BEGIN
     );
   END IF;
 
-  IF v_order.stripe_session_id <> p_stripe_session_id THEN
+  IF v_order.stripe_session_id IS DISTINCT FROM p_stripe_session_id THEN
     RETURN jsonb_build_object(
       'ok', FALSE,
       'code', 'SESSION_ID_MISMATCH',
@@ -341,7 +356,7 @@ BEGIN
   END IF;
 
   -- 4. 金額・通貨の厳格検証 (注文の total_price および JPY と一致しない返金案件登録を拒否)
-  IF p_amount IS NULL OR p_amount <= 0 OR p_amount <> v_order.total_price THEN
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount IS DISTINCT FROM v_order.total_price THEN
     RETURN jsonb_build_object(
       'ok', FALSE,
       'code', 'AMOUNT_MISMATCH',
@@ -357,7 +372,46 @@ BEGIN
     );
   END IF;
 
-  -- 5. Webhook イベントIDの注文・セッション束縛検証 (別注文・別セッションへのイベントID再利用遮断)
+  -- 5. Lock Level 4: 既存の返金案件レコードを行ロックして整合性を事前確認
+  SELECT *
+  INTO v_existing_req
+  FROM public.order_refund_requests
+  WHERE order_id = p_order_id
+  FOR UPDATE;
+
+  IF FOUND THEN
+    v_has_existing_req := TRUE;
+
+    IF v_existing_req.stripe_session_id IS DISTINCT FROM p_stripe_session_id THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'SESSION_ID_MISMATCH',
+        'message', '既存の返金案件のStripeセッションIDと一致しません'
+      );
+    END IF;
+
+    IF v_existing_req.payment_intent_id IS NOT NULL
+       AND v_clean_pi IS NOT NULL
+       AND v_existing_req.payment_intent_id IS DISTINCT FROM v_clean_pi THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'PAYMENT_INTENT_MISMATCH',
+        'message', '既存の返金案件のPaymentIntent IDと一致しません'
+      );
+    END IF;
+
+    IF v_existing_req.amount IS DISTINCT FROM p_amount
+       OR v_existing_req.target_refund_amount IS DISTINCT FROM p_amount THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'AMOUNT_MISMATCH',
+        'message', '既存の返金案件の金額と一致しません'
+      );
+    END IF;
+  END IF;
+
+  -- 6. Lock Level 5: Webhook イベントIDの注文・セッション束縛検証および確定
+  --    (ON CONFLICT 同時競合時にも IS NOT DISTINCT FROM で別注文・別セッションへの流用を遮断)
   IF p_webhook_event_id IS NOT NULL AND TRIM(p_webhook_event_id) <> '' THEN
     SELECT *
     INTO v_webhook_evt
@@ -366,7 +420,8 @@ BEGIN
     FOR UPDATE;
 
     IF FOUND THEN
-      IF v_webhook_evt.order_id <> p_order_id OR v_webhook_evt.session_id <> p_stripe_session_id THEN
+      IF v_webhook_evt.order_id IS DISTINCT FROM p_order_id
+         OR v_webhook_evt.session_id IS DISTINCT FROM p_stripe_session_id THEN
         RETURN jsonb_build_object(
           'ok', FALSE,
           'code', 'WEBHOOK_EVENT_CONFLICT',
@@ -382,44 +437,54 @@ BEGIN
         );
       END IF;
     END IF;
+
+    INSERT INTO public.stripe_webhook_events (
+      event_id,
+      session_id,
+      order_id,
+      status,
+      attempt_count,
+      error_code,
+      error_message,
+      started_at,
+      processed_at,
+      updated_at
+    )
+    VALUES (
+      p_webhook_event_id,
+      p_stripe_session_id,
+      p_order_id,
+      'succeeded',
+      1,
+      NULL,
+      NULL,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (event_id)
+    DO UPDATE SET
+      status = 'succeeded',
+      error_code = NULL,
+      error_message = NULL,
+      processed_at = COALESCE(public.stripe_webhook_events.processed_at, NOW()),
+      updated_at = NOW()
+    WHERE public.stripe_webhook_events.order_id IS NOT DISTINCT FROM p_order_id
+      AND public.stripe_webhook_events.session_id IS NOT DISTINCT FROM p_stripe_session_id
+      AND public.stripe_webhook_events.status <> 'failed_permanent'
+    RETURNING * INTO v_webhook_evt;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'ok', FALSE,
+        'code', 'WEBHOOK_EVENT_CONFLICT',
+        'message', '同一のWebhookイベントIDが異なる注文ID・セッションIDで使用されているか、恒久エラー状態です'
+      );
+    END IF;
   END IF;
 
-  -- 6. 既存の返金案件レコードを行ロックして確認
-  SELECT *
-  INTO v_existing_req
-  FROM public.order_refund_requests
-  WHERE order_id = p_order_id
-  FOR UPDATE;
-
-  IF FOUND THEN
-    -- 既存案件との整合性検証: Session ID / PaymentIntent ID / 金額が異なるイベントによる汚染を拒否
-    IF v_existing_req.stripe_session_id IS NOT NULL
-       AND v_existing_req.stripe_session_id <> p_stripe_session_id THEN
-      RETURN jsonb_build_object(
-        'ok', FALSE,
-        'code', 'SESSION_ID_MISMATCH',
-        'message', '既存の返金案件のStripeセッションIDと一致しません'
-      );
-    END IF;
-
-    IF v_existing_req.payment_intent_id IS NOT NULL
-       AND v_clean_pi IS NOT NULL
-       AND v_existing_req.payment_intent_id <> v_clean_pi THEN
-      RETURN jsonb_build_object(
-        'ok', FALSE,
-        'code', 'PAYMENT_INTENT_MISMATCH',
-        'message', '既存の返金案件のPaymentIntent IDと一致しません'
-      );
-    END IF;
-
-    IF v_existing_req.amount <> p_amount OR v_existing_req.target_refund_amount <> p_amount THEN
-      RETURN jsonb_build_object(
-        'ok', FALSE,
-        'code', 'AMOUNT_MISMATCH',
-        'message', '既存の返金案件の金額と一致しません'
-      );
-    END IF;
-
+  -- 7. 返金案件および注文テーブルの更新実行
+  IF v_has_existing_req THEN
     v_already_recorded := TRUE;
 
     IF v_existing_req.refund_status = 'succeeded' THEN
@@ -461,7 +526,7 @@ BEGIN
       WHERE order_id = p_order_id
       RETURNING * INTO v_req;
 
-      IF v_order.requires_manual_attention IS NOT TRUE OR v_order.refund_status <> v_req.refund_status THEN
+      IF v_order.requires_manual_attention IS NOT TRUE OR v_order.refund_status IS DISTINCT FROM v_req.refund_status THEN
         UPDATE public.orders
         SET
           refund_status = v_req.refund_status,
@@ -519,43 +584,6 @@ BEGIN
     RETURNING * INTO v_req;
   END IF;
 
-  -- 7. Webhook 経由の場合は、同一トランザクション内でイベントを succeeded（不整合検知・案件永続化完了）として確定
-  IF p_webhook_event_id IS NOT NULL AND TRIM(p_webhook_event_id) <> '' THEN
-    INSERT INTO public.stripe_webhook_events (
-      event_id,
-      session_id,
-      order_id,
-      status,
-      attempt_count,
-      error_code,
-      error_message,
-      started_at,
-      processed_at,
-      updated_at
-    )
-    VALUES (
-      p_webhook_event_id,
-      p_stripe_session_id,
-      p_order_id,
-      'succeeded',
-      1,
-      NULL,
-      NULL,
-      NOW(),
-      NOW(),
-      NOW()
-    )
-    ON CONFLICT (event_id)
-    DO UPDATE SET
-      status = 'succeeded',
-      error_code = NULL,
-      error_message = NULL,
-      processed_at = COALESCE(public.stripe_webhook_events.processed_at, NOW()),
-      updated_at = NOW()
-    WHERE public.stripe_webhook_events.order_id = p_order_id
-      AND public.stripe_webhook_events.session_id = p_stripe_session_id;
-  END IF;
-
   RETURN jsonb_build_object(
     'ok', TRUE,
     'order_id', p_order_id,
@@ -567,28 +595,119 @@ END;
 $$;
 
 -- -----------------------------------------------------------------------------
--- 3. SECURITY DEFINER 関数の実行権限制限 (0001 と同一の安全なロール確認方式)
+-- 3. 返金ステータス更新 RPC のロック順序統一 (update_refund_request_status_tx)
+--    Lock Level 3 (orders) -> Lock Level 4 (order_refund_requests) の順に統一
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.update_refund_request_status_tx(
+  p_order_id TEXT,
+  p_refund_status TEXT,
+  p_stripe_refund_id TEXT DEFAULT NULL,
+  p_last_error TEXT DEFAULT NULL,
+  p_requires_manual_attention BOOLEAN DEFAULT NULL,
+  p_increment_attempt BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_req public.order_refund_requests%ROWTYPE;
+  v_order public.orders%ROWTYPE;
+  v_new_attention BOOLEAN;
+BEGIN
+  -- Lock Level 3: 対象注文を先行して行ロック（record_cancelled_payment_discrepancy_tx とのデッドロックを完全防止）
+  SELECT *
+  INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  -- Lock Level 4: 対象返金案件を行ロック
+  SELECT *
+  INTO v_req
+  FROM public.order_refund_requests
+  WHERE order_id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', FALSE, 'code', 'REFUND_REQUEST_NOT_FOUND');
+  END IF;
+
+  IF p_requires_manual_attention IS NOT NULL THEN
+    v_new_attention := p_requires_manual_attention;
+  ELSIF p_refund_status = 'succeeded' THEN
+    v_new_attention := FALSE;
+  ELSIF p_refund_status = 'failed' THEN
+    v_new_attention := TRUE;
+  ELSE
+    v_new_attention := v_req.requires_manual_attention;
+  END IF;
+
+  UPDATE public.order_refund_requests
+  SET
+    refund_status = p_refund_status,
+    stripe_refund_id = COALESCE(p_stripe_refund_id, stripe_refund_id),
+    last_error = COALESCE(p_last_error, last_error),
+    attempt_count = CASE WHEN p_increment_attempt THEN attempt_count + 1 ELSE attempt_count END,
+    requires_manual_attention = v_new_attention,
+    updated_at = NOW()
+  WHERE order_id = p_order_id
+  RETURNING * INTO v_req;
+
+  IF FOUND THEN
+    UPDATE public.orders
+    SET
+      refund_status = p_refund_status,
+      requires_manual_attention = v_new_attention,
+      payment_status = CASE
+        WHEN p_refund_status = 'succeeded' THEN 'refunded'
+        ELSE payment_status
+      END,
+      refunded_amount = CASE
+        WHEN p_refund_status = 'succeeded' THEN v_req.target_refund_amount
+        ELSE refunded_amount
+      END,
+      updated_at = NOW()
+    WHERE id = p_order_id
+    RETURNING * INTO v_order;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', TRUE,
+    'refund_request', to_jsonb(v_req),
+    'order', to_jsonb(v_order)
+  );
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 4. SECURITY DEFINER 関数の実行権限制限 (0001 と同一の安全なロール確認方式)
 --    - PUBLIC / anon / authenticated から EXECUTE 権限を剥奪
 --    - service_role のみに EXECUTE 権限を付与
 -- -----------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM PUBLIC;
 
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
     EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM anon';
     EXECUTE 'REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM anon';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM anon';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM authenticated';
     EXECUTE 'REVOKE ALL ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) FROM authenticated';
+    EXECUTE 'REVOKE ALL ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) FROM authenticated';
   END IF;
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION public.record_cancelled_payment_discrepancy_tx(TEXT, TEXT, TEXT, INTEGER, TEXT, TEXT, TEXT) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.update_refund_request_status_tx(TEXT, TEXT, TEXT, TEXT, BOOLEAN, BOOLEAN) TO service_role';
   END IF;
 END $$;
 
