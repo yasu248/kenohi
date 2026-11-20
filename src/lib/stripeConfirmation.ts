@@ -144,6 +144,8 @@ export interface IPaymentConfirmationRepository {
   }): Promise<{
     updatedOrder: OrderRecordForPayment | null;
     transitionedFromUnpaid: boolean;
+    rejectionCode?: string;
+    rejectionMessage?: string;
   }>;
 
   /**
@@ -618,8 +620,13 @@ export async function verifyAndConfirmStripePayment(params: {
     }
 
     // 6. 条件付き原子的更新 + Webhook イベント succeeded 確定
-    //    (status === 'unpaid' のときだけ 'pending' に進め、preparing/completed は絶対に巻き戻さない)
-    const { updatedOrder, transitionedFromUnpaid } = await repo.atomicConfirmOrderPayment({
+    //    (status === 'unpaid' のときだけ 'pending' に進め、preparing/completed/handed_over は絶対に巻き戻さない)
+    const {
+      updatedOrder,
+      transitionedFromUnpaid,
+      rejectionCode,
+      rejectionMessage,
+    } = await repo.atomicConfirmOrderPayment({
       orderId,
       stripeSessionId: session.id,
       paidAmount: order.totalPrice,
@@ -627,7 +634,96 @@ export async function verifyAndConfirmStripePayment(params: {
     });
 
     if (!updatedOrder) {
-      const message = '注文の更新対象が見つかりませんでした';
+      // getOrderById と atomicConfirmOrderPayment (FOR UPDATE) の間に並列で注文取消が発生した場合:
+      // DB RPC が ORDER_CANCELLED を返却するため、即座に返金案件記録 (recordCancelledPaymentDiscrepancy) へ移行する
+      if (rejectionCode === 'ORDER_CANCELLED') {
+        const paymentIntentId =
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id;
+        const message =
+          '注文は決済確定の直前に取消済みとなりましたがStripe上で決済成功が確認されました。返金案件として永続化し管理者に通知します';
+
+        let discrepancyRecorded = false;
+        if (repo.recordCancelledPaymentDiscrepancy) {
+          const res = await repo.recordCancelledPaymentDiscrepancy({
+            orderId,
+            stripeSessionId: session.id,
+            paymentIntentId,
+            amount: session.amount_total ?? order.totalPrice,
+            currency: session.currency ?? 'jpy',
+            webhookEventId,
+            reason: 'cancelled_order_payment_received_race',
+          });
+          discrepancyRecorded = res.ok;
+        }
+
+        console.warn(
+          `[PaymentDiscrepancyAlert] CRITICAL (Race): Paid order cancelled concurrently. orderId=${orderId} sessionId=${session.id} paymentIntent=${paymentIntentId ?? 'none'}`
+        );
+
+        return {
+          ok: false,
+          code: 'CANCELLED_PAYMENT_DISCREPANCY',
+          message,
+          status: 409,
+          retryable: false,
+          discrepancyRecorded,
+          orderId,
+          stripeSessionId: session.id,
+          paymentIntentId,
+        };
+      }
+
+      if (
+        rejectionCode === 'SESSION_ID_MISMATCH' ||
+        rejectionCode === 'SESSION_ID_NOT_CONFIGURED'
+      ) {
+        const message =
+          rejectionMessage || `DBトランザクション検証でセッションID不整合が検出されました (${rejectionCode})`;
+        const recorded = await recordPermanentValidationFailure({
+          repo,
+          webhookEventId,
+          sessionId: session.id,
+          orderId,
+          code: rejectionCode,
+          message,
+        });
+        return {
+          ok: false,
+          code: rejectionCode,
+          message,
+          status: 400,
+          retryable: false,
+          permanentFailureRecorded: recorded,
+        };
+      }
+
+      if (
+        rejectionCode === 'LEGACY_ORDER_PROTECTED' ||
+        rejectionCode === 'INVALID_ORDER_STATE'
+      ) {
+        const message =
+          rejectionMessage || `注文状態が決済確定条件を満たしません (${rejectionCode})`;
+        const recorded = await recordPermanentValidationFailure({
+          repo,
+          webhookEventId,
+          sessionId: session.id,
+          orderId,
+          code: 'ORDER_CANCELLED',
+          message,
+        });
+        return {
+          ok: false,
+          code: 'ORDER_CANCELLED',
+          message,
+          status: 409,
+          retryable: false,
+          permanentFailureRecorded: recorded,
+        };
+      }
+
+      const message = rejectionMessage || '注文の更新対象が見つかりませんでした';
       if (webhookEventId) {
         await repo.releaseStripeWebhookEventOnTransientError(webhookEventId, message);
       }

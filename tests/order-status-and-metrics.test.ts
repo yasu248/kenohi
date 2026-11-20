@@ -68,6 +68,28 @@ describe('[Phase 0-C / 0-F] 4軸注文ステータス・過去データ保護・
         'start_preparing'
       );
     });
+
+    // 未決済 (unpaid) の注文は厨房操作で paid や調理中・受渡完了に遷移できないこと（cancel_order のみ許可）
+    const unpaidOrder: OrderDomainState = {
+      ...initial,
+      status: 'unpaid',
+      paymentStatus: 'unpaid',
+    };
+    for (const forbiddenAction of [
+      'start_preparing',
+      'mark_ready',
+      'revert_to_pending',
+      'revert_to_preparing',
+      'hand_over',
+    ] as const) {
+      assert.throws(() => {
+        computeNextOrderStatuses(unpaidOrder, forbiddenAction);
+      }, /未決済（unpaid）の注文は調理・受渡ステータスへ変更できません/);
+    }
+    const cancelledUnpaid = computeNextOrderStatuses(unpaidOrder, 'cancel_order');
+    assert.equal(cancelledUnpaid.status, 'cancelled');
+    assert.equal(cancelledUnpaid.payment_status, 'unpaid', '未決済注文をキャンセルしてもpaidにならないこと');
+    assert.equal(cancelledUnpaid.cancellation_status, 'cancelled');
   });
 
   it('4. 売上集計の厳格な分離: 確定純売上、未判定過去売上、本当のキャンセル、返金が明確に区別されること', () => {

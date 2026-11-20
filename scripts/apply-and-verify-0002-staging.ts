@@ -166,10 +166,93 @@ export async function runStep1And2() {
     p_stripe_session_id: 'cs_matching_session',
   });
   console.log('- 確定後の再送RPC呼び出し:', replayConfirmRes);
-  if (replayConfirmRes?.ok !== true || replayConfirmRes?.transitioned !== false) {
+  if (
+    replayConfirmRes?.ok !== true ||
+    replayConfirmRes?.transitioned !== false ||
+    replayConfirmRes?.transitioned_from_unpaid !== false
+  ) {
     throw new Error(`Replay confirm failed: ${JSON.stringify(replayConfirmRes)}`);
   }
-  console.log('✅ 再送時に transitioned=false で状態巻き戻しなしを確認');
+  console.log('✅ 再送時に transitioned=false / transitioned_from_unpaid=false で状態巻き戻しなしを確認');
+
+  // 5-6. 受渡完了注文 (status=cancelled, fulfillment_status=handed_over, cancellation_status=active) の誤判定防止確認
+  await supabase.from('orders').update({
+    status: 'cancelled',
+    payment_status: 'paid',
+    production_status: 'ready',
+    fulfillment_status: 'handed_over',
+    cancellation_status: 'active',
+  }).eq('id', testOrderId);
+
+  const { data: handedOverRes } = await supabase.rpc('confirm_stripe_order_payment_tx', {
+    p_order_id: testOrderId,
+    p_stripe_session_id: 'cs_matching_session',
+  });
+  console.log('- 受渡完了注文への再送RPC呼び出し:', handedOverRes);
+  if (handedOverRes?.ok !== true || handedOverRes?.transitioned_from_unpaid !== false) {
+    throw new Error(`Handed-over order was misclassified: ${JSON.stringify(handedOverRes)}`);
+  }
+  console.log('✅ 受渡完了注文が ORDER_CANCELLED と誤判定されず冪等成功することを確認');
+
+  // 5-7. 過去の未判定注文 (legacy_undetermined: status=cancelled かつ 4軸すべてNULL) の保護確認
+  await supabase.from('orders').update({
+    status: 'cancelled',
+    payment_status: null,
+    production_status: null,
+    fulfillment_status: null,
+    cancellation_status: null,
+  }).eq('id', testOrderId);
+
+  const { data: legacyRes } = await supabase.rpc('confirm_stripe_order_payment_tx', {
+    p_order_id: testOrderId,
+    p_stripe_session_id: 'cs_matching_session',
+  });
+  console.log('- 過去未判定注文 (legacy_undetermined) へのRPC呼び出し:', legacyRes);
+  if (legacyRes?.ok !== false || legacyRes?.code !== 'LEGACY_ORDER_PROTECTED') {
+    throw new Error(`Expected LEGACY_ORDER_PROTECTED, got: ${JSON.stringify(legacyRes)}`);
+  }
+  console.log('✅ 過去未判定注文 (legacy_undetermined) が LEGACY_ORDER_PROTECTED で保護されることを確認');
+
+  // 5-8. payment_status IS NULL の暗黙 paid 補完禁止 (INVALID_ORDER_STATE) の確認
+  await supabase.from('orders').update({
+    status: 'pending',
+    payment_status: null,
+    production_status: 'pending',
+    fulfillment_status: 'not_handed_over',
+    cancellation_status: 'active',
+    stripe_session_id: 'cs_matching_session',
+  }).eq('id', testOrderId);
+
+  const { data: nullPayRes } = await supabase.rpc('confirm_stripe_order_payment_tx', {
+    p_order_id: testOrderId,
+    p_stripe_session_id: 'cs_matching_session',
+  });
+  console.log('- payment_status=NULL の不整合レコードへのRPC呼び出し:', nullPayRes);
+  if (nullPayRes?.ok !== false || nullPayRes?.code !== 'INVALID_ORDER_STATE') {
+    throw new Error(`Expected INVALID_ORDER_STATE, got: ${JSON.stringify(nullPayRes)}`);
+  }
+  console.log('✅ payment_status IS NULL の暗黙 paid 補完が禁止されていることを確認');
+
+  // 5-9. record_cancelled_payment_discrepancy_tx における Session ID 未設定注文への後付け拒否 & 金額不一致拒否
+  await supabase.from('orders').update({
+    status: 'cancelled',
+    payment_status: 'unpaid',
+    cancellation_status: 'cancelled',
+    stripe_session_id: null,
+  }).eq('id', testOrderId);
+
+  const { data: discNoSessRes } = await supabase.rpc('record_cancelled_payment_discrepancy_tx', {
+    p_order_id: testOrderId,
+    p_stripe_session_id: 'cs_unverified_injected',
+    p_payment_intent_id: 'pi_unverified',
+    p_amount: 100,
+    p_currency: 'jpy',
+  });
+  console.log('- Session未設定キャンセル注文への返金案件登録RPC呼び出し:', discNoSessRes);
+  if (discNoSessRes?.ok !== false || discNoSessRes?.code !== 'SESSION_ID_NOT_CONFIGURED') {
+    throw new Error(`Expected SESSION_ID_NOT_CONFIGURED on discrepancy RPC, got: ${JSON.stringify(discNoSessRes)}`);
+  }
+  console.log('✅ Session ID 未設定のキャンセル済み注文に対する未検証 Session ID の後付け紐付けを拒否');
 
   // クリーンアップ
   await supabase.from('stripe_webhook_events').delete().eq('order_id', testOrderId);

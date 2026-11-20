@@ -1,102 +1,110 @@
 -- =============================================================================
--- Rollback Migration: 0002_phase0_stripe_session_hardening_rollback.sql
--- Description: 0001_phase0_foundation.sql の confirm_stripe_order_payment_tx 定義へロールバック
+-- Safe Incident Containment & Recovery SQL:
+-- supabase/migrations/0002_phase0_stripe_session_hardening_rollback.sql
+--
+-- 【重要原則】
+-- 旧 0001 の confirm_stripe_order_payment_tx 定義への単純復元は、
+-- 「stripe_session_id 未検証（別注文の支払済みSession流用が可能）」および
+-- 「status <> 'unpaid' に対する一律 payment_status = 'paid' 上書き」の脆弱性を
+-- 復活させるため、通常のロールバック手順としては絶対に使用しないこと。
+--
+-- 障害発生時は以下の Fail-Closed（安全側停止）手順により、
+-- 1. 新規注文受付の即時停止 (STORE_STATE_001.isManualOpen = false)
+-- 2. 未処理決済・保留中Webhookイベント・返金待ち案件の監査抽出
+-- 3. Stripe API 実ステータスとの照合および修正版RPCでの再確定
+-- を実施する。
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION public.confirm_stripe_order_payment_tx(
-  p_order_id TEXT,
-  p_stripe_session_id TEXT,
-  p_webhook_event_id TEXT DEFAULT NULL
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
+BEGIN;
+
+-- -----------------------------------------------------------------------------
+-- Step 1: 新規モバイル注文受付の即時安全停止 (Fail-Closed)
+--         既存の営業日・欠品設定・採番履歴を一切破壊せず isManualOpen のみを false に更新
+-- -----------------------------------------------------------------------------
+DO $$
 DECLARE
-  v_order public.orders%ROWTYPE;
-  v_transitioned BOOLEAN := FALSE;
+  v_raw TEXT;
+  v_json JSONB;
 BEGIN
-  -- 対象注文を行ロックして取得
-  SELECT *
-  INTO v_order
+  PERFORM pg_advisory_xact_lock(hashtext('store_state:kenocha_main'));
+
+  SELECT customer_avatar
+  INTO v_raw
   FROM public.orders
-  WHERE id = p_order_id
+  WHERE id = 'STORE_STATE_001'
   FOR UPDATE;
 
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('found', FALSE);
+  IF FOUND AND v_raw IS NOT NULL THEN
+    BEGIN
+      v_json := v_raw::JSONB;
+      v_json := jsonb_set(v_json, '{isManualOpen}', 'false'::jsonb, true);
+
+      UPDATE public.orders
+      SET
+        customer_avatar = v_json::text,
+        updated_at = NOW()
+      WHERE id = 'STORE_STATE_001';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'STORE_STATE_001 JSON parse skipped during emergency freeze';
+    END;
   END IF;
+END $$;
 
-  IF v_order.status = 'unpaid' THEN
-    UPDATE public.orders
-    SET
-      status = 'pending',
-      payment_status = 'paid',
-      production_status = 'pending',
-      fulfillment_status = 'not_handed_over',
-      cancellation_status = 'active',
-      stripe_session_id = p_stripe_session_id,
-      updated_at = NOW()
-    WHERE id = p_order_id
-    RETURNING * INTO v_order;
+COMMIT;
 
-    v_transitioned := TRUE;
-  ELSE
-    -- すでに pending / preparing / completed 等に進んでいる場合は製造状態を巻き戻さない
-    UPDATE public.orders
-    SET
-      payment_status = 'paid',
-      stripe_session_id = p_stripe_session_id,
-      updated_at = NOW()
-    WHERE id = p_order_id
-    RETURNING * INTO v_order;
+-- -----------------------------------------------------------------------------
+-- Step 2: 未処理決済・保留中イベントの照合用監査クエリ (Read-Only)
+--         ※ 障害調査時に実行し、出力された stripe_session_id を Stripe API
+--           (stripe.checkout.sessions.retrieve) と突合して実決済状態を確認する。
+-- -----------------------------------------------------------------------------
 
-    v_transitioned := FALSE;
-  END IF;
+-- [監査クエリ A] Stripeセッション発行済みだがDB上で未決済 (unpaid) のまま残っている注文一覧
+-- SELECT
+--   id AS order_id,
+--   order_number,
+--   total_price,
+--   status,
+--   payment_status,
+--   cancellation_status,
+--   stripe_session_id,
+--   created_at,
+--   updated_at
+-- FROM public.orders
+-- WHERE id <> 'STORE_STATE_001'
+--   AND (status = 'unpaid' OR COALESCE(payment_status, 'unpaid') = 'unpaid')
+--   AND stripe_session_id IS NOT NULL
+-- ORDER BY created_at DESC;
 
-  -- Webhook 経由の場合は同一トランザクション内でイベントを succeeded に確定する
-  IF p_webhook_event_id IS NOT NULL THEN
-    INSERT INTO public.stripe_webhook_events (
-      event_id,
-      session_id,
-      order_id,
-      status,
-      attempt_count,
-      error_code,
-      error_message,
-      started_at,
-      processed_at,
-      updated_at
-    )
-    VALUES (
-      p_webhook_event_id,
-      p_stripe_session_id,
-      p_order_id,
-      'succeeded',
-      1,
-      NULL,
-      NULL,
-      NOW(),
-      NOW(),
-      NOW()
-    )
-    ON CONFLICT (event_id)
-    DO UPDATE SET
-      status = 'succeeded',
-      error_code = NULL,
-      error_message = NULL,
-      processed_at = NOW(),
-      updated_at = NOW();
-  END IF;
+-- [監査クエリ B] 処理中 (processing) または恒久エラー (failed_permanent) として記録された Webhook イベント一覧
+-- SELECT
+--   event_id,
+--   session_id,
+--   order_id,
+--   status,
+--   attempt_count,
+--   error_code,
+--   error_message,
+--   started_at,
+--   processed_at,
+--   updated_at
+-- FROM public.stripe_webhook_events
+-- WHERE status IN ('processing', 'failed_permanent')
+-- ORDER BY updated_at DESC;
 
-  RETURN jsonb_build_object(
-    'found', TRUE,
-    'transitioned', v_transitioned,
-    'order', to_jsonb(v_order)
-  );
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.confirm_stripe_order_payment_tx(TEXT, TEXT, TEXT) TO service_role;
+-- [監査クエリ C] キャンセル競合により返金対応待ち (requires_manual_attention = true) となっている案件一覧
+-- SELECT
+--   r.id AS refund_request_id,
+--   r.order_id,
+--   o.order_number,
+--   r.stripe_session_id,
+--   r.payment_intent_id,
+--   r.amount,
+--   r.refund_status,
+--   r.last_error,
+--   r.requires_manual_attention,
+--   r.created_at
+-- FROM public.order_refund_requests r
+-- JOIN public.orders o ON o.id = r.order_id
+-- WHERE r.requires_manual_attention = TRUE
+--    OR r.refund_status IN ('pending', 'failed')
+-- ORDER BY r.created_at DESC;

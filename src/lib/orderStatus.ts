@@ -249,11 +249,21 @@ export function computeNextOrderStatuses(
     throw new Error('すでにキャンセル（注文取消）された注文のステータスは変更できません');
   }
 
+  // 【信頼境界ガード】Stripe決済確認を経由していない未決済注文 (unpaid) は、
+  // 厨房操作 (start_preparing / mark_ready / revert_to_pending / revert_to_preparing / hand_over) によって
+  // paid や調理待ち・受渡完了へ遷移させてはならない（cancel_order のみ許可）
+  if (
+    (current.status === 'unpaid' || current.paymentStatus === 'unpaid') &&
+    action !== 'cancel_order'
+  ) {
+    throw new Error('未決済（unpaid）の注文は調理・受渡ステータスへ変更できません');
+  }
+
   switch (action) {
     case 'start_preparing':
       return {
         status: 'preparing',
-        payment_status: current.paymentStatus === 'unpaid' ? 'paid' : current.paymentStatus,
+        payment_status: current.paymentStatus,
         production_status: 'preparing',
         fulfillment_status: 'not_handed_over',
         cancellation_status: 'active',
@@ -262,7 +272,7 @@ export function computeNextOrderStatuses(
     case 'mark_ready':
       return {
         status: 'completed',
-        payment_status: current.paymentStatus === 'unpaid' ? 'paid' : current.paymentStatus,
+        payment_status: current.paymentStatus,
         production_status: 'ready',
         fulfillment_status: 'not_handed_over',
         cancellation_status: 'active',
@@ -271,7 +281,7 @@ export function computeNextOrderStatuses(
     case 'revert_to_pending':
       return {
         status: 'pending',
-        payment_status: current.paymentStatus === 'unpaid' ? 'paid' : current.paymentStatus,
+        payment_status: current.paymentStatus,
         production_status: 'pending',
         fulfillment_status: 'not_handed_over',
         cancellation_status: 'active',
@@ -280,7 +290,7 @@ export function computeNextOrderStatuses(
     case 'revert_to_preparing':
       return {
         status: 'preparing',
-        payment_status: current.paymentStatus === 'unpaid' ? 'paid' : current.paymentStatus,
+        payment_status: current.paymentStatus,
         production_status: 'preparing',
         fulfillment_status: 'not_handed_over',
         cancellation_status: 'active',
@@ -291,7 +301,7 @@ export function computeNextOrderStatuses(
       // 4軸では fulfillment_status='handed_over', cancellation_status='active' を明示記録する
       return {
         status: 'cancelled',
-        payment_status: current.paymentStatus === 'unpaid' ? 'paid' : current.paymentStatus,
+        payment_status: current.paymentStatus,
         production_status: 'ready',
         fulfillment_status: 'handed_over',
         cancellation_status: 'active',

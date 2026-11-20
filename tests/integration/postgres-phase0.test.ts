@@ -8,6 +8,8 @@ import { resolve } from 'node:path';
 const CONTAINER_NAME = 'kenocha-phase0-verify-pg';
 const MIGRATION_FILE_PATH = resolve(process.cwd(), 'supabase/migrations/0001_phase0_foundation.sql');
 const ROLLBACK_FILE_PATH = resolve(process.cwd(), 'supabase/migrations/0001_phase0_foundation_rollback.sql');
+const MIGRATION_0002_FILE_PATH = resolve(process.cwd(), 'supabase/migrations/0002_phase0_stripe_session_hardening.sql');
+const CONTAINMENT_0002_FILE_PATH = resolve(process.cwd(), 'supabase/migrations/0002_phase0_stripe_session_hardening_rollback.sql');
 
 /**
  * ローカルコンテナ内の PostgreSQL に対して SQL を安全に実行するヘルパー
@@ -1193,6 +1195,603 @@ describe('[Phase 0] 実PostgreSQL検証環境 統合テスト', { skip: !isDocke
       assert.doesNotThrow(() => {
         runPsql(migrationSql);
       }, '0001_phase0_foundation.sql は何度再実行してもエラーなく適用できること');
+    });
+  });
+
+  describe('8. 0002_phase0_stripe_session_hardening.sql 厳格遷移・セッション照合・退行防止の実PostgreSQL統合検証', () => {
+    before(() => {
+      const migration0001Sql = readFileSync(MIGRATION_FILE_PATH, 'utf8');
+      const migration0002Sql = readFileSync(MIGRATION_0002_FILE_PATH, 'utf8');
+      runPsql(migration0001Sql);
+      runPsql(migration0002Sql);
+    });
+
+    it('8.1 Session ID未設定 (NULL / 空文字) の注文に対する誤確定防止 (SESSION_ID_NOT_CONFIGURED)', () => {
+      runPsql(`
+        DELETE FROM public.stripe_webhook_events WHERE event_id IN ('evt_0002_null_sess', 'evt_0002_empty_sess');
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_no_sess', '未設定客', '8001', 400, 'unpaid', 'unpaid', 'pending', 'not_handed_over', 'active', NULL
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'unpaid', payment_status = 'unpaid', stripe_session_id = NULL, cancellation_status = 'active';
+      `);
+
+      const resNull = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_no_sess', 'cs_test_any', 'evt_0002_null_sess');
+      `);
+      assert.equal(resNull.found, true);
+      assert.equal(resNull.ok, false);
+      assert.equal(resNull.code, 'SESSION_ID_NOT_CONFIGURED');
+
+      const orderState = querySingle(`
+        SELECT status || '|' || payment_status FROM public.orders WHERE id = 'ord_0002_no_sess';
+      `);
+      assert.equal(orderState, 'unpaid|unpaid', 'stripe_session_id未設定注文は絶対にpaidにならないこと');
+
+      const evtCount = querySingle(`
+        SELECT COUNT(*) FROM public.stripe_webhook_events WHERE event_id = 'evt_0002_null_sess' AND status = 'succeeded';
+      `);
+      assert.equal(evtCount, '0', '拒否時にWebhookがsucceededとして記録されないこと');
+    });
+
+    it('8.2 別注文の支払済みSession ID流用に対するDBレベル拒否 (SESSION_ID_MISMATCH)', () => {
+      runPsql(`
+        DELETE FROM public.stripe_webhook_events WHERE event_id = 'evt_0002_mismatch';
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_victim', '正規客', '8002', 400, 'unpaid', 'unpaid', 'pending', 'not_handed_over', 'active', 'cs_test_expected_victim_8002'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'unpaid', payment_status = 'unpaid', stripe_session_id = 'cs_test_expected_victim_8002', cancellation_status = 'active';
+      `);
+
+      const resMismatch = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_victim', 'cs_test_stolen_other_session', 'evt_0002_mismatch');
+      `);
+      assert.equal(resMismatch.found, true);
+      assert.equal(resMismatch.ok, false);
+      assert.equal(resMismatch.code, 'SESSION_ID_MISMATCH');
+
+      const orderState = querySingle(`
+        SELECT status || '|' || payment_status || '|' || stripe_session_id
+        FROM public.orders WHERE id = 'ord_0002_victim';
+      `);
+      assert.equal(orderState, 'unpaid|unpaid|cs_test_expected_victim_8002', '不一致Sessionで注文が確定されたりstripe_session_idが上書きされないこと');
+    });
+
+    it('8.3 正常決済確定 (unpaid -> pending / paid) と 0001/0002 両戻り値キーの互換性', () => {
+      const resValid = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_victim', 'cs_test_expected_victim_8002', 'evt_0002_valid_confirm');
+      `);
+      assert.equal(resValid.found, true);
+      assert.equal(resValid.ok, true);
+      assert.equal(resValid.transitioned, true);
+      assert.equal(resValid.transitioned_from_unpaid, true, '0001互換の transitioned_from_unpaid キーが維持されていること');
+      assert.equal(resValid.order.status, 'pending');
+      assert.equal(resValid.order.payment_status, 'paid');
+
+      const evtStatus = querySingle(`
+        SELECT status FROM public.stripe_webhook_events WHERE event_id = 'evt_0002_valid_confirm';
+      `);
+      assert.equal(evtStatus, 'succeeded');
+    });
+
+    it('8.4 既存決済済み注文の冪等性と製造状態・返金済みステータス (partially_refunded / refunded) の巻き戻り防止', () => {
+      // 1. 調理中 (preparing) へ進めた後に再送された場合
+      runPsql(`
+        UPDATE public.orders
+        SET status = 'preparing', production_status = 'preparing'
+        WHERE id = 'ord_0002_victim';
+      `);
+
+      const resReplay = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_victim', 'cs_test_expected_victim_8002', 'evt_0002_valid_confirm');
+      `);
+      assert.equal(resReplay.ok, true);
+      assert.equal(resReplay.transitioned, false);
+      assert.equal(resReplay.transitioned_from_unpaid, false);
+      assert.equal(resReplay.order.status, 'preparing', '調理中ステータスがpendingに巻き戻らないこと');
+
+      // 2. 一部返金・全額返金済み (refunded) に進んだ注文に対して遅延再送が来た場合、payment_status が paid に上書きされないこと
+      runPsql(`
+        UPDATE public.orders
+        SET status = 'completed', production_status = 'ready', payment_status = 'refunded', refunded_amount = 400
+        WHERE id = 'ord_0002_victim';
+      `);
+
+      const resRefundedReplay = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_victim', 'cs_test_expected_victim_8002', 'evt_0002_refunded_replay');
+      `);
+      assert.equal(resRefundedReplay.ok, true);
+      assert.equal(resRefundedReplay.transitioned_from_unpaid, false);
+      assert.equal(resRefundedReplay.order.payment_status, 'refunded', '返金済みステータスが paid に巻き戻されないこと');
+    });
+
+    it('8.5 受渡完了注文 (status=cancelled, fulfillment_status=handed_over, cancellation_status=active) をキャンセルと誤判定しないこと', () => {
+      runPsql(`
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_handed_over', '受渡完了客', '8003', 500, 'cancelled', 'paid', 'ready', 'handed_over', 'active', 'cs_test_handed_over_8003'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled', payment_status = 'paid', production_status = 'ready',
+          fulfillment_status = 'handed_over', cancellation_status = 'active',
+          stripe_session_id = 'cs_test_handed_over_8003';
+      `);
+
+      const resHandedOver = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_handed_over', 'cs_test_handed_over_8003', 'evt_0002_handed_over');
+      `);
+      assert.equal(resHandedOver.ok, true, '受渡完了注文は ORDER_CANCELLED で拒否されず冪等成功すること');
+      assert.equal(resHandedOver.transitioned_from_unpaid, false);
+      assert.equal(resHandedOver.order.fulfillment_status, 'handed_over');
+      assert.equal(resHandedOver.order.cancellation_status, 'active');
+    });
+
+    it('8.6 過去の未判定注文 (legacy_undetermined: status=cancelled かつ 4軸すべてNULL) の完全保全', () => {
+      runPsql(`
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_legacy_undetermined', '過去受渡客', '1050', 600, 'cancelled', NULL, NULL, NULL, NULL, 'cs_legacy_1050'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled', payment_status = NULL, production_status = NULL,
+          fulfillment_status = NULL, cancellation_status = NULL, stripe_session_id = 'cs_legacy_1050';
+      `);
+
+      const resLegacy = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_legacy_undetermined', 'cs_legacy_1050', 'evt_0002_legacy');
+      `);
+      assert.equal(resLegacy.ok, false);
+      assert.equal(resLegacy.code, 'LEGACY_ORDER_PROTECTED');
+
+      const legacyCols = querySingle(`
+        SELECT status || '|' || COALESCE(payment_status, 'NULL') || '|' || COALESCE(production_status, 'NULL') || '|' || COALESCE(fulfillment_status, 'NULL') || '|' || COALESCE(cancellation_status, 'NULL')
+        FROM public.orders WHERE id = 'ord_0002_legacy_undetermined';
+      `);
+      assert.equal(legacyCols, 'cancelled|NULL|NULL|NULL|NULL', '過去未判定注文の4軸カラムが推測で書き換えられないこと');
+    });
+
+    it('8.7 キャンセル済み注文の復活防止 (ORDER_CANCELLED) とキャンセル後決済成功の返金案件登録・重複防止・Session整合性', () => {
+      runPsql(`
+        DELETE FROM public.order_refund_requests WHERE order_id = 'ord_0002_cancelled';
+        DELETE FROM public.stripe_webhook_events WHERE event_id IN ('evt_0002_cancel_confirm', 'evt_0002_cancel_disc');
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_cancelled', '取消競合客', '8004', 750, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled', 'cs_test_cancelled_8004'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled', payment_status = 'unpaid', cancellation_status = 'cancelled',
+          stripe_session_id = 'cs_test_cancelled_8004', refund_status = 'none', requires_manual_attention = false;
+      `);
+
+      // 1. confirm_stripe_order_payment_tx は ORDER_CANCELLED で拒否し、調理待ちに復活させないこと
+      const resConfirmCancelled = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_cancelled', 'cs_test_cancelled_8004', 'evt_0002_cancel_confirm');
+      `);
+      assert.equal(resConfirmCancelled.ok, false);
+      assert.equal(resConfirmCancelled.code, 'ORDER_CANCELLED');
+
+      const afterConfirmCancel = querySingle(`
+        SELECT status || '|' || cancellation_status || '|' || payment_status
+        FROM public.orders WHERE id = 'ord_0002_cancelled';
+      `);
+      assert.equal(afterConfirmCancel, 'cancelled|cancelled|unpaid', 'キャンセル済み注文が復活しないこと');
+
+      // 2. record_cancelled_payment_discrepancy_tx に異なる Session ID を渡すと SESSION_ID_MISMATCH で拒否されること
+      const resDiscMismatch = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancelled', 'cs_test_wrong_session', 'pi_wrong', 750, 'jpy', 'evt_0002_cancel_disc'
+        );
+      `);
+      assert.equal(resDiscMismatch.ok, false);
+      assert.equal(resDiscMismatch.code, 'SESSION_ID_MISMATCH');
+
+      // 3. 正しい Session ID で record_cancelled_payment_discrepancy_tx を呼ぶと返金案件が永続化され、再送でも重複しないこと
+      const resDiscOk = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancelled', 'cs_test_cancelled_8004', 'pi_test_8004', 750, 'jpy', 'evt_0002_cancel_disc'
+        );
+      `);
+      assert.equal(resDiscOk.ok, true);
+      assert.equal(resDiscOk.refund_request.refund_status, 'pending');
+      assert.equal(resDiscOk.refund_request.requires_manual_attention, true);
+
+      const resDiscReplay = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancelled', 'cs_test_cancelled_8004', 'pi_test_8004', 750, 'jpy', 'evt_0002_cancel_disc'
+        );
+      `);
+      assert.equal(resDiscReplay.ok, true);
+
+      const refundCount = querySingle(`
+        SELECT COUNT(*) FROM public.order_refund_requests WHERE order_id = 'ord_0002_cancelled';
+      `);
+      assert.equal(refundCount, '1', '返金案件が重複登録されないこと');
+    });
+
+    it('8.8 同時Webhook並列実行時の FOR UPDATE 行ロックとトランザクション直列化 (10並列で初回遷移は1回のみ)', async () => {
+      runPsql(`
+        DELETE FROM public.stripe_webhook_events WHERE order_id = 'ord_0002_concurrent';
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_concurrent', '並列決済客', '8005', 450, 'unpaid', 'unpaid', 'pending', 'not_handed_over', 'active', 'cs_test_concurrent_8005'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'unpaid', payment_status = 'unpaid', production_status = 'pending',
+          fulfillment_status = 'not_handed_over', cancellation_status = 'active',
+          stripe_session_id = 'cs_test_concurrent_8005';
+      `);
+
+      const parallelCalls = Array.from({ length: 10 }, (_, idx) =>
+        new Promise<any>((resolve, reject) => {
+          try {
+            const out = queryJson(`
+              SET ROLE service_role;
+              SELECT public.confirm_stripe_order_payment_tx(
+                'ord_0002_concurrent',
+                'cs_test_concurrent_8005',
+                'evt_0002_conc_${idx + 1}'
+              );
+            `);
+            resolve(out);
+          } catch (e) {
+            reject(e);
+          }
+        })
+      );
+
+      const results = await Promise.all(parallelCalls);
+      assert.equal(results.length, 10);
+      assert.ok(results.every((r) => r.ok === true), '10並列すべてがエラーなく成功すること');
+
+      const transitionedCount = results.filter((r) => r.transitioned_from_unpaid === true).length;
+      const replayCount = results.filter((r) => r.transitioned_from_unpaid === false).length;
+      assert.equal(transitionedCount, 1, 'FOR UPDATE 行ロックにより unpaid->pending の初回遷移は厳密に1回のみであること');
+      assert.equal(replayCount, 9, '残り9件の並列呼び出しは冪等再送 (transitioned_from_unpaid=false) となること');
+    });
+
+    it('8.9 想定外の状態 (payment_status=failed) や STORE_STATE_001 に対する更新拒否 (INVALID_ORDER_STATE)', () => {
+      const storeStateRes = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('STORE_STATE_001', 'cs_any', 'evt_store_state');
+      `);
+      assert.equal(storeStateRes.ok, false);
+      assert.equal(storeStateRes.code, 'INVALID_ORDER_STATE');
+
+      runPsql(`
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_failed_state', '決済失敗客', '8006', 400, 'pending', 'failed', 'pending', 'not_handed_over', 'active', 'cs_test_failed_8006'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'pending', payment_status = 'failed', stripe_session_id = 'cs_test_failed_8006';
+      `);
+
+      const failedRes = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_failed_state', 'cs_test_failed_8006', 'evt_failed_state');
+      `);
+      assert.equal(failedRes.ok, false);
+      assert.equal(failedRes.code, 'INVALID_ORDER_STATE');
+    });
+
+    it('8.10 0002適用後の全8個RPCのACL権限維持・再実行冪等性・安全な緊急受付停止スクリプト検証', () => {
+      // 1. 0002 再実行の冪等性
+      const migration0002Sql = readFileSync(MIGRATION_0002_FILE_PATH, 'utf8');
+      assert.doesNotThrow(() => {
+        runPsql(migration0002Sql);
+      });
+
+      // 2. 全8個のRPCの SECURITY DEFINER, search_path, ACL (anon=false, authenticated=false, service_role=true)
+      const rpcCount = querySingle(`
+        SELECT COUNT(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname IN (
+            'next_order_number',
+            'confirm_stripe_order_payment_tx',
+            'update_store_state_tx',
+            'create_mobile_order_tx',
+            'finalize_mobile_order_checkout_tx',
+            'abort_mobile_order_checkout_tx',
+            'record_cancelled_payment_discrepancy_tx',
+            'update_refund_request_status_tx'
+          )
+          AND p.prosecdef = true
+          AND p.proconfig::text LIKE '%search_path=public, pg_temp%'
+          AND has_function_privilege('anon', p.oid, 'EXECUTE') = false
+          AND has_function_privilege('authenticated', p.oid, 'EXECUTE') = false
+          AND has_function_privilege('service_role', p.oid, 'EXECUTE') = true;
+      `);
+      assert.equal(rpcCount, '8', '0002適用後も全8個のRPCでACLとSECURITY DEFINERが維持されていること');
+
+      // 3. 安全な緊急受付停止スクリプト (0002_phase0_stripe_session_hardening_rollback.sql) が脆弱な0001関数に戻さず受付を停止できること
+      const containmentSql = readFileSync(CONTAINMENT_0002_FILE_PATH, 'utf8');
+      assert.doesNotThrow(() => {
+        runPsql(containmentSql);
+      });
+
+      // 緊急受付停止後も SESSION_ID_MISMATCH 防御が生きていること
+      const afterContainmentMismatch = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_victim', 'cs_attacker_after_containment', 'evt_after_containment');
+      `);
+      assert.equal(afterContainmentMismatch.ok, false);
+      assert.equal(afterContainmentMismatch.code, 'SESSION_ID_MISMATCH', '緊急停止スクリプト実行後もセッションID不一致防御が維持されていること');
+    });
+
+    it('8.11 返金完了済み案件 (refund_status=succeeded) の完全不変性 (遅延Webhookや重複イベントで一切のフィールドが書き換わらないこと)', () => {
+      // ord_0002_cancelled (750円, cs_test_cancelled_8004, pi_test_8004) を update_refund_request_status_tx で succeeded に確定
+      const refundComplete = queryJson(`
+        SET ROLE service_role;
+        SELECT public.update_refund_request_status_tx(
+          'ord_0002_cancelled',
+          'succeeded',
+          're_test_immutable_8004',
+          'completed_audit_trail_entry',
+          false,
+          true
+        );
+      `);
+      assert.equal(refundComplete.ok, true);
+      assert.equal(refundComplete.refund_request.refund_status, 'succeeded');
+      assert.equal(refundComplete.refund_request.stripe_refund_id, 're_test_immutable_8004');
+      assert.equal(refundComplete.refund_request.attempt_count, 1);
+
+      const snapshotBefore = querySingle(`
+        SELECT
+          r.payment_intent_id || '|' ||
+          r.stripe_session_id || '|' ||
+          r.amount::text || '|' ||
+          r.target_refund_amount::text || '|' ||
+          r.stripe_refund_id || '|' ||
+          r.refund_status || '|' ||
+          r.attempt_count::text || '|' ||
+          COALESCE(r.last_error, '') || '|' ||
+          r.requires_manual_attention::text || '|' ||
+          r.updated_at::text || '|' ||
+          o.payment_status || '|' ||
+          o.refunded_amount::text || '|' ||
+          o.refund_status || '|' ||
+          o.requires_manual_attention::text
+        FROM public.order_refund_requests r
+        JOIN public.orders o ON o.id = r.order_id
+        WHERE r.order_id = 'ord_0002_cancelled';
+      `);
+
+      // 1. 同一内容での遅延Webhook再送 (異なる reason 'late_duplicate_webhook' を渡しても一切書き換わらないこと)
+      const replayOnSucceeded = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancelled',
+          'cs_test_cancelled_8004',
+          'pi_test_8004',
+          750,
+          'jpy',
+          'evt_0002_late_after_refund',
+          'late_duplicate_webhook_should_not_overwrite'
+        );
+      `);
+      assert.equal(replayOnSucceeded.ok, true);
+      assert.equal(replayOnSucceeded.already_recorded, true);
+
+      const snapshotAfter = querySingle(`
+        SELECT
+          r.payment_intent_id || '|' ||
+          r.stripe_session_id || '|' ||
+          r.amount::text || '|' ||
+          r.target_refund_amount::text || '|' ||
+          r.stripe_refund_id || '|' ||
+          r.refund_status || '|' ||
+          r.attempt_count::text || '|' ||
+          COALESCE(r.last_error, '') || '|' ||
+          r.requires_manual_attention::text || '|' ||
+          r.updated_at::text || '|' ||
+          o.payment_status || '|' ||
+          o.refunded_amount::text || '|' ||
+          o.refund_status || '|' ||
+          o.requires_manual_attention::text
+        FROM public.order_refund_requests r
+        JOIN public.orders o ON o.id = r.order_id
+        WHERE r.order_id = 'ord_0002_cancelled';
+      `);
+      assert.equal(
+        snapshotAfter,
+        snapshotBefore,
+        '返金完了済み案件では PaymentIntent / Session / 金額 / Refund ID / ステータス / エラー履歴 / updated_at / 注文返金状態が1ビットも変化しないこと'
+      );
+
+      // 2. 異なる PaymentIntent ID を渡した場合は PAYMENT_INTENT_MISMATCH で拒否されること
+      const diffPiRes = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancelled',
+          'cs_test_cancelled_8004',
+          'pi_tampered_9999',
+          750,
+          'jpy'
+        );
+      `);
+      assert.equal(diffPiRes.ok, false);
+      assert.equal(diffPiRes.code, 'PAYMENT_INTENT_MISMATCH');
+    });
+
+    it('8.12 返金処理中 (processing) および返金失敗 (failed) 案件へのイベント再送時の状態保護と手動対応フラグ維持', () => {
+      runPsql(`
+        DELETE FROM public.order_refund_requests WHERE order_id = 'ord_0002_refund_states';
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_refund_states', '状態遷移検証客', '8007', 900, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled', 'cs_test_refund_states_8007'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled', cancellation_status = 'cancelled', total_price = 900, stripe_session_id = 'cs_test_refund_states_8007';
+      `);
+
+      // 初回登録 (pending)
+      const initRes = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_refund_states', 'cs_test_refund_states_8007', NULL, 900, 'jpy', NULL, 'initial_discrepancy'
+        );
+      `);
+      assert.equal(initRes.ok, true);
+      assert.equal(initRes.refund_request.refund_status, 'pending');
+
+      // 1. processing 状態に移行した後、イベント再送 (PaymentIntent補完あり) が到着した場合:
+      //    refund_status='processing' と attempt_count=1 が維持され、pending に巻き戻らないこと
+      runPsql(`
+        SET ROLE service_role;
+        SELECT public.update_refund_request_status_tx(
+          'ord_0002_refund_states', 'processing', NULL, 'refund_api_in_flight', true, true
+        );
+      `);
+
+      const replayDuringProcessing = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_refund_states', 'cs_test_refund_states_8007', 'pi_filled_8007', 900, 'jpy', NULL, 'replay_during_processing'
+        );
+      `);
+      assert.equal(replayDuringProcessing.ok, true);
+      assert.equal(replayDuringProcessing.refund_request.refund_status, 'processing', 'processing が pending に巻き戻らないこと');
+      assert.equal(replayDuringProcessing.refund_request.payment_intent_id, 'pi_filled_8007', '未設定だったPaymentIntentのみ補完されること');
+      assert.equal(replayDuringProcessing.refund_request.attempt_count, 1);
+      assert.equal(replayDuringProcessing.refund_request.last_error, 'refund_api_in_flight', '既存の監査履歴が上書きされないこと');
+
+      // 2. failed 状態に移行した後、仮に requires_manual_attention が誤って false にされていたとしても、
+      //    再送時に refund_status='failed' と last_error='stripe_rate_limit_error' を維持したまま requires_manual_attention=true を強制維持すること
+      runPsql(`
+        SET ROLE service_role;
+        SELECT public.update_refund_request_status_tx(
+          'ord_0002_refund_states', 'failed', NULL, 'stripe_rate_limit_error', false, true
+        );
+      `);
+
+      const replayAfterFailed = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_refund_states', 'cs_test_refund_states_8007', 'pi_filled_8007', 900, 'jpy', NULL, 'replay_should_not_clear_error'
+        );
+      `);
+      assert.equal(replayAfterFailed.ok, true);
+      assert.equal(replayAfterFailed.refund_request.refund_status, 'failed', 'failed が pending に戻らないこと');
+      assert.equal(replayAfterFailed.refund_request.last_error, 'stripe_rate_limit_error', '失敗エラー理由が再送reasonで消されないこと');
+      assert.equal(replayAfterFailed.refund_request.attempt_count, 2);
+      assert.equal(replayAfterFailed.refund_request.requires_manual_attention, true, '手動対応状態が確実に維持されること');
+      assert.equal(replayAfterFailed.order.requires_manual_attention, true, '注文側の手動対応フラグもtrueに維持されること');
+    });
+
+    it('8.13 Session ID未設定のキャンセル済み注文に対する未検証Session後付け紐付け拒否と金額・通貨不一致拒否', () => {
+      runPsql(`
+        DELETE FROM public.order_refund_requests WHERE order_id = 'ord_0002_cancel_no_sess';
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_cancel_no_sess', 'Session未設定取消客', '8008', 550, 'cancelled', 'unpaid', 'pending', 'not_handed_over', 'cancelled', NULL
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'cancelled', cancellation_status = 'cancelled', stripe_session_id = NULL, total_price = 550;
+      `);
+
+      // 1. stripe_session_id が NULL の注文に対して RPC 直接呼び出しで任意の Session ID を紐付けようとしても SESSION_ID_NOT_CONFIGURED で拒否されること
+      const resNoSess = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancel_no_sess', 'cs_unverified_injected', 'pi_injected', 550, 'jpy'
+        );
+      `);
+      assert.equal(resNoSess.ok, false);
+      assert.equal(resNoSess.code, 'SESSION_ID_NOT_CONFIGURED');
+
+      const orderSessAfter = querySingle(`
+        SELECT COALESCE(stripe_session_id, 'NULL') FROM public.orders WHERE id = 'ord_0002_cancel_no_sess';
+      `);
+      assert.equal(orderSessAfter, 'NULL', '未設定注文の stripe_session_id が勝手に書き換えられないこと');
+
+      const reqCount = querySingle(`
+        SELECT COUNT(*) FROM public.order_refund_requests WHERE order_id = 'ord_0002_cancel_no_sess';
+      `);
+      assert.equal(reqCount, '0', '返金案件が作成されないこと');
+
+      // 2. Session ID 設定済みでも注文金額 (550円) と異なる金額や異なる通貨を渡した場合は拒否されること
+      runPsql(`
+        UPDATE public.orders SET stripe_session_id = 'cs_valid_8008' WHERE id = 'ord_0002_cancel_no_sess';
+      `);
+
+      const resBadAmount = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancel_no_sess', 'cs_valid_8008', 'pi_8008', 99999, 'jpy'
+        );
+      `);
+      assert.equal(resBadAmount.ok, false);
+      assert.equal(resBadAmount.code, 'AMOUNT_MISMATCH');
+
+      const resBadCurrency = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancel_no_sess', 'cs_valid_8008', 'pi_8008', 550, 'usd'
+        );
+      `);
+      assert.equal(resBadCurrency.ok, false);
+      assert.equal(resBadCurrency.code, 'CURRENCY_MISMATCH');
+    });
+
+    it('8.14 payment_status IS NULL の暗黙 paid 補完禁止と同一WebhookイベントIDの別注文・別Session再利用拒否 (WEBHOOK_EVENT_CONFLICT)', () => {
+      // 1. status='pending' だが payment_status IS NULL の不整合レコードが暗黙に paid へ補完されず INVALID_ORDER_STATE で拒否されること
+      runPsql(`
+        INSERT INTO public.orders (
+          id, customer_name, order_number, total_price, status, payment_status, production_status, fulfillment_status, cancellation_status, stripe_session_id
+        ) VALUES (
+          'ord_0002_null_paystatus', '不整合状態客', '8009', 400, 'pending', NULL, 'pending', 'not_handed_over', 'active', 'cs_null_pay_8009'
+        ) ON CONFLICT (id) DO UPDATE SET
+          status = 'pending', payment_status = NULL, cancellation_status = 'active', stripe_session_id = 'cs_null_pay_8009';
+      `);
+
+      const resNullPay = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx('ord_0002_null_paystatus', 'cs_null_pay_8009', 'evt_null_pay_8009');
+      `);
+      assert.equal(resNullPay.ok, false);
+      assert.equal(resNullPay.code, 'INVALID_ORDER_STATE', 'payment_status IS NULL を暗黙に paid へ補完しないこと');
+
+      const nullPayAfter = querySingle(`
+        SELECT COALESCE(payment_status, 'NULL') FROM public.orders WHERE id = 'ord_0002_null_paystatus';
+      `);
+      assert.equal(nullPayAfter, 'NULL');
+
+      // 2. すでに ord_0002_victim (cs_test_expected_victim_8002) で記録済みの Webhook イベント 'evt_0002_valid_confirm' を
+      //    別の注文 ('ord_0002_handed_over' や 'ord_0002_cancel_no_sess') に再利用した場合、WEBHOOK_EVENT_CONFLICT で拒否されること
+      const resReuseConfirm = queryJson(`
+        SET ROLE service_role;
+        SELECT public.confirm_stripe_order_payment_tx(
+          'ord_0002_handed_over', 'cs_test_handed_over_8003', 'evt_0002_valid_confirm'
+        );
+      `);
+      assert.equal(resReuseConfirm.ok, false);
+      assert.equal(resReuseConfirm.code, 'WEBHOOK_EVENT_CONFLICT');
+
+      const resReuseDiscrepancy = queryJson(`
+        SET ROLE service_role;
+        SELECT public.record_cancelled_payment_discrepancy_tx(
+          'ord_0002_cancel_no_sess', 'cs_valid_8008', 'pi_8008', 550, 'jpy', 'evt_0002_valid_confirm'
+        );
+      `);
+      assert.equal(resReuseDiscrepancy.ok, false);
+      assert.equal(resReuseDiscrepancy.code, 'WEBHOOK_EVENT_CONFLICT');
     });
   });
 });

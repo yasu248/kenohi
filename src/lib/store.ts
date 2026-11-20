@@ -484,7 +484,7 @@ export async function updateOrderStatus(
 
   const nextStatuses = computeNextOrderStatuses(currentDomain, action);
 
-  const { data, error } = await supabase
+  let updateQuery = supabase
     .from('orders')
     .update({
       status: nextStatuses.status,
@@ -495,8 +495,14 @@ export async function updateOrderStatus(
       updated_at: new Date().toISOString(),
     })
     .eq('id', orderId)
-    .select()
-    .single();
+    .neq('id', STORE_STATE_ID);
+
+  // 【信頼境界ガード】注文キャンセル以外の厨房ステータス操作では、DBクエリ条件でも未決済注文 (unpaid) を除外する
+  if (action !== 'cancel_order') {
+    updateQuery = updateQuery.neq('status', 'unpaid');
+  }
+
+  const { data, error } = await updateQuery.select().single();
 
   if (error) {
     if (error.code === 'PGRST116') return null;
@@ -581,6 +587,15 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
     }
 
     const existing = existingData as StripeWebhookEventDbRow;
+
+    // 同一のWebhookイベントIDが異なる注文IDまたはセッションIDに対して再利用された場合は恒久拒否
+    if (existing.order_id !== orderId || existing.session_id !== sessionId) {
+      return {
+        state: 'already_failed_permanent',
+        errorCode: 'SESSION_ID_MISMATCH',
+        errorMessage: '同一のWebhookイベントIDが異なる注文IDまたはセッションIDに再利用されました',
+      };
+    }
 
     if (existing.status === 'succeeded') {
       return { state: 'already_succeeded' };
@@ -704,6 +719,8 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
   }): Promise<{
     updatedOrder: OrderRecordForPayment | null;
     transitionedFromUnpaid: boolean;
+    rejectionCode?: string;
+    rejectionMessage?: string;
   }> {
     // PostgreSQL 側の単一トランザクション RPC (`confirm_stripe_order_payment_tx`) を呼び出し、
     // 注文ステータスの条件付き更新と Webhook イベントの succeeded 記録を同一トランザクションで確定する
@@ -728,7 +745,12 @@ export const supabasePaymentRepository: IPaymentConfirmationRepository = {
     } | null;
 
     if (!payload || !payload.found || payload.ok === false || !payload.order) {
-      return { updatedOrder: null, transitionedFromUnpaid: false };
+      return {
+        updatedOrder: null,
+        transitionedFromUnpaid: false,
+        rejectionCode: payload?.code,
+        rejectionMessage: payload?.message,
+      };
     }
 
     const row = payload.order;
