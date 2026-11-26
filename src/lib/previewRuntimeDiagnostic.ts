@@ -65,15 +65,34 @@ export interface PreviewRuntimeDiagnosticResult {
   haltLogPayload: PreviewHaltLog | null;
 }
 
+export const PREVIEW_DIAG_REASONS_HEADER = 'X-Preview-Diag-Reasons';
+
 export interface DiagnosticLoggers {
   info: (message: string) => void;
   warn: (message: string) => void;
+  error: (message: string) => void;
 }
 
 const DEFAULT_LOGGERS: DiagnosticLoggers = {
   info: (msg) => console.info(msg),
   warn: (msg) => console.warn(msg),
+  error: (msg) => console.error(msg),
 };
+
+/**
+ * レスポンスヘッダ (X-Preview-Diag-Reasons) の出力許可条件。
+ * Vercel Authentication 保護下の対象 Preview ブランチかつ一時診断フラグが明示有効な場合のみ true。
+ * Production、対象外ブランチ、環境識別情報が欠落・不一致の場合は常に false としヘッダを出力しない。
+ */
+export function canEmitDiagnosticResponseHeader(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  return (
+    env.VERCEL_ENV === 'preview' &&
+    env.VERCEL_GIT_COMMIT_REF === EXPECTED_DIAGNOSTIC_BRANCH &&
+    env.PREVIEW_SUPABASE_DIAG_ENABLED === 'true'
+  );
+}
 
 /**
  * 4条件すべてを満たす場合のみ Preview 限定 Runtime 診断を有効化する。
@@ -322,7 +341,7 @@ export function evaluatePreviewRuntimeDiagnostic(
 /**
  * 診断ログおよび安全停止理由コードをサーバー側ログのみに出力する。
  * - 4条件成立時: console.info で [PreviewRuntimeDiagnostic] を出力
- * - 安全停止時 (前提不成立・ランタイム検証不成立の双方): console.warn で [PreviewRuntimeDiagnostic][HALT] を必ず出力
+ * - 安全停止時 (前提不成立・ランタイム検証不成立の双方): console.warn と console.error の双方で [PreviewRuntimeDiagnostic][HALT] を必ず出力
  * - Production 正常経路: 一切出力しない
  */
 export function emitPreviewRuntimeDiagnostic(
@@ -334,7 +353,9 @@ export function emitPreviewRuntimeDiagnostic(
     loggers.info(`[PreviewRuntimeDiagnostic] ${JSON.stringify(result.logPayload)}`);
   }
   if (result.shouldHaltBeforeSupabaseConnect && result.haltLogPayload) {
-    loggers.warn(`[PreviewRuntimeDiagnostic][HALT] ${JSON.stringify(result.haltLogPayload)}`);
+    const haltMessage = `[PreviewRuntimeDiagnostic][HALT] ${JSON.stringify(result.haltLogPayload)}`;
+    loggers.warn(haltMessage);
+    loggers.error(haltMessage);
   }
   return result;
 }
@@ -342,23 +363,36 @@ export function emitPreviewRuntimeDiagnostic(
 /**
  * GET /api/ping 用のサーバー側実行ラッパー。
  * 停止条件成立時は loadAndPingStore (store.ts の動的ロードおよび Supabase 接続) を一切実行しない。
- * HTTP レスポンスには診断情報を一切含めない。
+ * HTTP レスポンスボディには診断情報を一切含めない。
+ * 対象 Preview 環境かつ診断フラグ有効が確認できた停止時のみ、固定理由コード一覧を X-Preview-Diag-Reasons ヘッダに付与し、
+ * キャッシュ残存を防ぐため Cache-Control: no-store を付与する。
  */
 export async function executeGuardedPing(
   env: Record<string, string | undefined>,
   loadAndPingStore: () => Promise<void>,
   loggers: DiagnosticLoggers = DEFAULT_LOGGERS
-): Promise<{ status: number; body: Record<string, string> }> {
+): Promise<{ status: number; body: Record<string, string>; headers: Record<string, string> }> {
   const diag = emitPreviewRuntimeDiagnostic(env, loggers);
   if (diag.shouldHaltBeforeSupabaseConnect) {
+    const headers: Record<string, string> = {
+      'Cache-Control': 'no-store',
+    };
+    if (canEmitDiagnosticResponseHeader(env) && diag.reasons.length > 0) {
+      headers[PREVIEW_DIAG_REASONS_HEADER] = diag.reasons.join(',');
+    }
     return {
       status: 500,
       body: {
         status: 'error',
         message: 'Preview diagnostic precondition halted Supabase connection',
       },
+      headers,
     };
   }
+
+  const responseHeaders: Record<string, string> = diag.enabled
+    ? { 'Cache-Control': 'no-store' }
+    : {};
 
   try {
     await loadAndPingStore();
@@ -369,6 +403,7 @@ export async function executeGuardedPing(
         message: 'Supabase is alive',
         timestamp: new Date().toISOString(),
       },
+      headers: responseHeaders,
     };
   } catch (err) {
     console.error('ping failed:', err);
@@ -378,6 +413,7 @@ export async function executeGuardedPing(
         status: 'error',
         message: String(err),
       },
+      headers: responseHeaders,
     };
   }
 }
